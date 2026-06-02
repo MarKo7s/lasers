@@ -1,0 +1,10 @@
+{
+  "baudrate": 115200,
+  "models": [
+    {
+      "model": "TLB-8800",
+      "idn_query": "*IDN?",
+      "match": "TLB-8800"
+    }
+  ]
+}
