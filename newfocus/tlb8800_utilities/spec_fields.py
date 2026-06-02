@@ -1,0 +1,106 @@
+"""Names of :class:`LaserSpecs` fields that can be refreshed from the instrument."""
+
+from __future__ import annotations
+
+from typing import Literal
+
+# Derived in software (not a direct query); refreshed only via ``loop_mode``.
+DERIVED_SPEC_FIELDS = frozenset({"current_control"})
+
+SpecField = Literal[
+    "loop_mode",
+    "identity",
+    "laser_output",
+    "interlock_state",
+    "operation_complete",
+    "power",
+    "power_min",
+    "power_max",
+    "power_unit",
+    "current",
+    "current_max",
+    "tuning_domain",
+    "wavelength_min",
+    "wavelength_max",
+    "tune_setpoint",
+    "modulation_source",
+    "scan_start",
+    "scan_start_acceleration_offset",
+    "scan_stop",
+    "scan_stop_deceleration_offset",
+    "scan_step_size",
+    "scan_mode",
+    "scan_speed",
+    "scan_speed_min",
+    "scan_speed_max",
+    "scan_dwell_time_ms",
+    "scan_cycles",
+    "scan_cycles_count",
+    "laser_diode_temperature_setpoint",
+    "laser_diode_temperature",
+    "environment_temperature",
+    "temperature_regulated",
+    "fan_override",
+    "fan_speed",
+    "trigger_polarity",
+    "trigger_a_enabled",
+    "trigger_b_enabled",
+    "operating_hours",
+    "error_count",
+    "error_codes",
+]
+
+ALL_SPEC_FIELDS: tuple[SpecField, ...] = (
+    "loop_mode",
+    "identity",
+    "laser_output",
+    "interlock_state",
+    "operation_complete",
+    "power",
+    "power_min",
+    "power_max",
+    "power_unit",
+    "current",
+    "current_max",
+    "tuning_domain",
+    "wavelength_min",
+    "wavelength_max",
+    "tune_setpoint",
+    "modulation_source",
+    "scan_start",
+    "scan_start_acceleration_offset",
+    "scan_stop",
+    "scan_stop_deceleration_offset",
+    "scan_step_size",
+    "scan_mode",
+    "scan_speed",
+    "scan_speed_min",
+    "scan_speed_max",
+    "scan_dwell_time_ms",
+    "scan_cycles",
+    "scan_cycles_count",
+    "laser_diode_temperature_setpoint",
+    "laser_diode_temperature",
+    "environment_temperature",
+    "temperature_regulated",
+    "fan_override",
+    "fan_speed",
+    "trigger_polarity",
+    "trigger_a_enabled",
+    "trigger_b_enabled",
+    "operating_hours",
+    "error_count",
+    "error_codes",
+)
+
+TUNING_DOMAIN_SPEC_FIELDS: tuple[SpecField, ...] = (
+    "tuning_domain",
+    "wavelength_min",
+    "wavelength_max",
+)
+
+SCAN_SPEED_SPEC_FIELDS: tuple[SpecField, ...] = (
+    "scan_speed",
+    "scan_speed_min",
+    "scan_speed_max",
+)

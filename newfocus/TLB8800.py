@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Callable, Optional, TypeVar, Union
+from typing import Optional, TypeVar, Union
 
 from newfocus.tlb8800_utilities.commands import TLBReadCommands, TLBSetCommands
 from newfocus.tlb8800_utilities.errors import (
@@ -26,6 +26,8 @@ from newfocus.tlb8800_utilities.protocol import (
     parse_numeric_response,
 )
 from newfocus.tlb8800_utilities.session_log import LaserSessionLogger
+from newfocus.tlb8800_utilities.spec_fields import ALL_SPEC_FIELDS
+from newfocus.tlb8800_utilities.spec_refresh import refresh_laser_specs_fields
 from newfocus.tlb8800_utilities.types import LaserIdentity, LaserSpecs, OperationCompleteState
 
 from newfocus.tlb8800_utilities.types import (  # noqa: F401
@@ -137,78 +139,77 @@ class TLB8800:
             )
         return self._specs
 
-    def refresh_specs(self) -> LaserSpecs:
-        """Query laser state; unsupported or failed reads become None."""
-        r = self.read
-
-        def _read_optional(fn: Callable[[], T]) -> Optional[T]:
-            try:
-                return fn()
-            except (TLB8800ParseError, TimeoutError, OSError, ValueError):
-                return None
-
-        loop_mode = _read_optional(r.loop_mode)
-        current_control = loop_mode == LoopMode.CONSTANT_CURRENT
-
-        if current_control:
-            power: Optional[float] = None
-            power_unit: Optional[PowerUnit] = None
-        else:
-            power = _read_optional(r.power)
-            power_unit = _read_optional(r.power_unit)
-
-        identity = _read_optional(r.identify)
-        if identity is not None:
-            self._identity = identity
-
-        self._specs = LaserSpecs(
-            current_control=current_control,
-            loop_mode=loop_mode,
-            identity=identity,
-            laser_output=_read_optional(r.laser_output),
-            interlock_state=_read_optional(r.interlock_state),
-            operation_complete=_read_optional(r.operation_complete),
-            power=power,
-            power_min=_read_optional(r.power_min),
-            power_max=_read_optional(r.power_max),
-            power_unit=power_unit,
-            current=_read_optional(r.current),
-            current_max=_read_optional(r.current_max),
-            tuning_domain=_read_optional(r.tuning_domain),
-            wavelength_min=_read_optional(r.wavelength_min),
-            wavelength_max=_read_optional(r.wavelength_max),
-            tune_setpoint=_read_optional(r.tune_setpoint),
-            modulation_source=_read_optional(r.modulation_source),
-            scan_start=_read_optional(r.scan_start),
-            scan_start_acceleration_offset=_read_optional(r.scan_start_acceleration_offset),
-            scan_stop=_read_optional(r.scan_stop),
-            scan_stop_deceleration_offset=_read_optional(r.scan_stop_deceleration_offset),
-            scan_step_size=_read_optional(r.scan_step_size),
-            scan_mode=_read_optional(r.scan_mode),
-            scan_speed=_read_optional(r.scan_speed),
-            scan_speed_min=_read_optional(r.scan_speed_min),
-            scan_speed_max=_read_optional(r.scan_speed_max),
-            scan_dwell_time_ms=_read_optional(r.scan_dwell_time_ms),
-            scan_cycles=_read_optional(r.scan_cycles),
-            scan_cycles_count=_read_optional(r.scan_cycles_count),
-            laser_diode_temperature_setpoint=_read_optional(r.laser_diode_temperature_setpoint),
-            laser_diode_temperature=_read_optional(r.laser_diode_temperature),
-            environment_temperature=_read_optional(r.environment_temperature),
-            temperature_regulated=_read_optional(r.temperature_regulated),
-            fan_override=_read_optional(r.fan_override),
-            fan_speed=_read_optional(r.fan_speed),
-            trigger_polarity=_read_optional(r.trigger_polarity),
-            trigger_a_enabled=_read_optional(r.trigger_a_enabled),
-            trigger_b_enabled=_read_optional(r.trigger_b_enabled),
-            operating_hours=_read_optional(r.operating_hours),
-            error_count=_read_optional(r.error_count),
-            error_codes=_read_optional(r.all_error_codes),
-        )
+    def refresh_specs_fields(self, *fields: str) -> LaserSpecs:
+        """Re-query only the given ``LaserSpecs`` fields and update the cached snapshot."""
+        if self._specs is None:
+            raise RuntimeError(
+                "Laser specs not loaded; call refresh_specs() or connect(refresh_specs=True)"
+            )
+        self._specs = refresh_laser_specs_fields(self, self._specs, fields)
         return self._specs
 
+    def _initial_specs(self) -> LaserSpecs:
+        """Placeholder snapshot before the first field refresh."""
+        loop_mode = None
+        try:
+            loop_mode = self.read.loop_mode()
+        except (TLB8800ParseError, TimeoutError, OSError, ValueError):
+            pass
+        current_control = loop_mode == LoopMode.CONSTANT_CURRENT
+        return LaserSpecs(
+            current_control=current_control,
+            loop_mode=loop_mode,
+            identity=None,
+            laser_output=None,
+            interlock_state=None,
+            operation_complete=None,
+            power=None,
+            power_min=None,
+            power_max=None,
+            power_unit=None,
+            current=None,
+            current_max=None,
+            tuning_domain=None,
+            wavelength_min=None,
+            wavelength_max=None,
+            tune_setpoint=None,
+            modulation_source=None,
+            scan_start=None,
+            scan_start_acceleration_offset=None,
+            scan_stop=None,
+            scan_stop_deceleration_offset=None,
+            scan_step_size=None,
+            scan_mode=None,
+            scan_speed=None,
+            scan_speed_min=None,
+            scan_speed_max=None,
+            scan_dwell_time_ms=None,
+            scan_cycles=None,
+            scan_cycles_count=None,
+            laser_diode_temperature_setpoint=None,
+            laser_diode_temperature=None,
+            environment_temperature=None,
+            temperature_regulated=None,
+            fan_override=None,
+            fan_speed=None,
+            trigger_polarity=None,
+            trigger_a_enabled=None,
+            trigger_b_enabled=None,
+            operating_hours=None,
+            error_count=None,
+            error_codes=None,
+        )
+
+    def refresh_specs(self) -> LaserSpecs:
+        """Query full laser state; unsupported or failed reads become None."""
+        if self._specs is None:
+            self._specs = self._initial_specs()
+        return self.refresh_specs_fields(*ALL_SPEC_FIELDS)
+
     def close(self) -> None:
-        if self._session_log is not None:
-            self._session_log.close()
+        session_log = self._session_log
+        if session_log is not None:
+            session_log.close()
             self._session_log = None
         self._transport.close()
 

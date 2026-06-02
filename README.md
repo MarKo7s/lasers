@@ -11,6 +11,7 @@ Repository: [github.com/MarKo7s/lasers](https://github.com/MarKo7s/lasers)
 - **`LaserSpecs`** snapshot (auto-loaded on connect) — wavelength range, scan limits, control mode
 - Session **logging** under `ProgramData`
 - Jupyter notebook for interactive testing (`discover_lasers.ipynb`)
+- **NiceGUI** control widget (`ui/nicegui`) with shared `core/` logic (PySide planned under `ui/pyside`)
 
 ## Requirements
 
@@ -30,10 +31,45 @@ conda activate lasers_env
 Or with pip only:
 
 ```bash
-pip install pyserial>=3.5
+pip install -r requirements.txt
 ```
 
-Run scripts and the notebook from the project root so `import discovery` and `import newfocus` resolve correctly.
+Run scripts and the notebook from the project root so `import discovery`, `import newfocus`, and `import core` resolve correctly.
+
+## NiceGUI laser widget
+
+Dark-themed control panel: USB discovery, connect, spec-driven bounds (power/current, tune, scan), status log, and live telemetry.
+
+**Standalone demo** (from the `Laser` folder, with `lasers_env` active):
+
+```bash
+python -m ui.nicegui.app
+```
+
+Open http://localhost:8080 in a browser.
+
+**Embed in another NiceGUI app:**
+
+```python
+from nicegui import ui
+from ui.nicegui import create_laser_widget
+
+with ui.column():
+    create_laser_widget()
+```
+
+Shared logic lives in `core/`: generic `DiscoveryService` and `create_laser_controller()`, with TLB-8800 specifics under `core/tlb8800/` (`TLB8800Controller`, `bindings_from_specs`). A future PySide widget can reuse the same layer; add a new subpackage and factory branch for other laser models.
+
+### Project layout (`core` and UI)
+
+| Path | Role |
+|------|------|
+| `core/discovery_service.py` | USB scan → `DiscoveredDevice` list |
+| `core/factory.py` | `create_laser_controller(device)` by model |
+| `core/models.py` | Shared `DiscoveredDevice`, `StatusMessage` |
+| `core/tlb8800/` | TLB-8800 controller, UI bindings, enum labels |
+| `ui/nicegui/` | NiceGUI widget and standalone demo (`python -m ui.nicegui.app`) |
+| `ui/pyside/` | Planned Qt widget (same `core` layer) |
 
 ## Quick start
 

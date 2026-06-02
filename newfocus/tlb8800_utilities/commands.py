@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Union
+from typing import Union
 
 from newfocus.tlb8800_utilities.errors import CommandResult, TLB8800ParseError, parse_error_codes
 from newfocus.tlb8800_utilities.idn import parse_idn
@@ -18,16 +18,12 @@ from newfocus.tlb8800_utilities.types import (
     TuningDomain,
 )
 
-if TYPE_CHECKING:
-    from newfocus.TLB8800 import TLB8800
-
-
 class TLBReadCommands:
     """Legacy read/query commands (``laser.read.<name>()``)."""
 
     __slots__ = ("_laser",)
 
-    def __init__(self, laser: TLB8800) -> None:
+    def __init__(self, laser: "TLB8800") -> None:
         self._laser = laser
 
     # --- Identification & system ---
@@ -188,7 +184,7 @@ class TLBSetCommands:
 
     __slots__ = ("_laser",)
 
-    def __init__(self, laser: TLB8800) -> None:
+    def __init__(self, laser: "TLB8800") -> None:
         self._laser = laser
 
     def software_interlock(self, inhibit: bool) -> CommandResult:

@@ -8,3 +8,4 @@ dependencies:
   - ipywidgets
   - pip:
       - pyserial>=3.5
+      - nicegui>=2.0
