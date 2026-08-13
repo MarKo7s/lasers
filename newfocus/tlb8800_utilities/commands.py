@@ -234,7 +234,7 @@ class TLBSetCommands:
         return self._laser._command(f"mode {int(mode)}")
 
     def scan_speed(self, speed: Union[int, float]) -> CommandResult:
-        return self._laser._command(f"spd {speed}")
+        return self._laser._command(f"spd {int(round(float(speed)))}")
 
     def scan_dwell_time_ms(self, dwell_ms: Union[int, float]) -> CommandResult:
         return self._laser._command(f"dwl {dwell_ms}")

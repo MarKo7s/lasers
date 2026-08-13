@@ -61,6 +61,20 @@ body, .nicegui-content {
 .laser-telemetry .q-field__native {
   color: #cbd5e1 !important;
 }
+.laser-regulation .q-field,
+.laser-tuning .q-field {
+  min-width: 10.5rem;
+}
+.laser-panel .q-field__label {
+  overflow: visible !important;
+  text-overflow: clip !important;
+  white-space: normal !important;
+  line-height: 1.2 !important;
+}
+.laser-panel .q-field--labeled.q-field--dense .q-field__label,
+.laser-panel .q-field--float .q-field__label {
+  max-width: none !important;
+}
 """
 
 

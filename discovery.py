@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from importlib.resources import files as resources_files
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -15,15 +16,8 @@ from newfocus.tlb8800_utilities.protocol import DEFAULT_BAUDRATE, DEFAULT_TIMEOU
 _DEFAULT_CONFIG = Path(__file__).resolve().parent / "supported_models.json"
 
 
-@dataclass(frozen=True)
-class SupportedModel:
-    model: str
-    idn_query: str
-    match: str
-
-
-def _load_config(config_path: Path) -> tuple[int, tuple[SupportedModel, ...]]:
-    data = json.loads(config_path.read_text(encoding="utf-8"))
+def _load_config_from_text(config_text: str) -> tuple[int, tuple[SupportedModel, ...]]:
+    data = json.loads(config_text)
     baudrate = int(data.get("baudrate", DEFAULT_BAUDRATE))
     models: list[SupportedModel] = []
     for entry in data.get("models", []):
@@ -35,8 +29,19 @@ def _load_config(config_path: Path) -> tuple[int, tuple[SupportedModel, ...]]:
             )
         )
     if not models:
-        raise ValueError(f"No models defined in {config_path}")
+        raise ValueError("No supported models defined in supported_models.json")
     return baudrate, tuple(models)
+
+
+@dataclass(frozen=True)
+class SupportedModel:
+    model: str
+    idn_query: str
+    match: str
+
+
+def _load_config(config_path: Path) -> tuple[int, tuple[SupportedModel, ...]]:
+    return _load_config_from_text(config_path.read_text(encoding="utf-8"))
 
 
 class LaserDiscovery:
@@ -53,9 +58,22 @@ class LaserDiscovery:
         baudrate: Optional[int] = None,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
-        path = Path(config_path) if config_path is not None else _DEFAULT_CONFIG
-        self._config_path = path
-        file_baudrate, self._models = _load_config(path)
+        if config_path is not None:
+            path = Path(config_path)
+            self._config_path = path
+            file_baudrate, self._models = _load_config(path)
+        else:
+            # Source checkout (supported_models.json next to this file) OR
+            # installed package (supported_models.json under lasers/ package data).
+            if _DEFAULT_CONFIG.is_file():
+                self._config_path = _DEFAULT_CONFIG
+                file_baudrate, self._models = _load_config(_DEFAULT_CONFIG)
+            else:
+                self._config_path = Path("<package-data>")
+                config_text = resources_files("lasers").joinpath("supported_models.json").read_text(
+                    encoding="utf-8"
+                )
+                file_baudrate, self._models = _load_config_from_text(config_text)
         self.baudrate = file_baudrate if baudrate is None else baudrate
         self.timeout = timeout
 

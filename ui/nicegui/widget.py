@@ -16,23 +16,55 @@ from core.tlb8800 import (
     MODULATION_OPTIONS,
     POWER_UNIT_OPTIONS,
     SCAN_MODE_OPTIONS,
+    TRIGGER_POLARITY_OPTIONS,
     TUNING_DOMAIN_OPTIONS,
     ControlBindings,
     NumericBinding,
     TelemetrySnapshot,
     TLB8800Controller,
     bindings_from_specs,
+    is_frequency_domain,
+    scan_bound_label,
+    scan_speed_label,
+    scan_step_label,
+    tune_setpoint_label,
 )
 from newfocus.tlb8800_utilities.types import (
     ModulationSource,
     PowerUnit,
     ScanMode,
+    TriggerPolarity,
     TuningDomain,
 )
 from ui.nicegui.theme import apply_laser_theme, laser_header
 
 
-def _bind_numeric(field: ui.number, binding: NumericBinding) -> None:
+def _numeric_field_label(
+    base: str,
+    binding: NumericBinding,
+    *,
+    as_integer: bool = False,
+) -> str:
+    def _fmt(value: float) -> str:
+        return str(int(round(value))) if as_integer else f"{value:g}"
+
+    if binding.minimum is not None and binding.maximum is not None:
+        return f"{base} ({_fmt(binding.minimum)} – {_fmt(binding.maximum)})"
+    if binding.minimum is not None:
+        return f"{base} (≥ {_fmt(binding.minimum)})"
+    if binding.maximum is not None:
+        return f"{base} (≤ {_fmt(binding.maximum)})"
+    return base
+
+
+def _bind_numeric(
+    field: ui.number,
+    binding: NumericBinding,
+    *,
+    label: str | None = None,
+    sync_value: bool = True,
+    as_integer: bool = False,
+) -> None:
     """Apply bounds via NiceGUI's float min/max API (not .props(), which stores strings)."""
     if binding.minimum is not None:
         field.min = float(binding.minimum)
@@ -46,8 +78,18 @@ def _bind_numeric(field: ui.number, binding: NumericBinding) -> None:
 
     field._props.set_optional("step", float(binding.step))
     field.set_enabled(binding.enabled)
-    if binding.value is not None:
-        field.set_value(float(binding.value))
+    if label is not None:
+        field.set_label(_numeric_field_label(label, binding, as_integer=as_integer))
+    if sync_value and binding.value is not None:
+        value = int(round(binding.value)) if as_integer else float(binding.value)
+        field.set_value(value)
+
+
+def _integer_value(field: ui.number) -> Optional[int]:
+    raw = _numeric_value(field)
+    if raw is None:
+        return None
+    return int(round(raw))
 
 
 def _numeric_value(field: ui.number) -> Optional[float]:
@@ -57,8 +99,8 @@ def _numeric_value(field: ui.number) -> Optional[float]:
     return float(raw)
 
 
-def _section_title(text: str) -> None:
-    ui.label(text).classes("laser-section-title q-mt-md q-mb-xs")
+def _section_title(text: str) -> ui.label:
+    return ui.label(text).classes("laser-section-title q-mt-md q-mb-xs")
 
 
 class LaserControlWidget:
@@ -125,47 +167,108 @@ class LaserControlWidget:
                 "Software interlock (inhibit)",
                 on_change=self._on_interlock,
             )
+            self._check_errors_btn = ui.button(
+                "Check errors",
+                icon="bug_report",
+                on_click=self._on_check_errors,
+            ).props("outline")
         self._interlock_state_label = ui.label("Interlock: —").classes("text-caption text-grey-5")
 
     def _build_regulation(self) -> None:
         _section_title("Regulation")
         self._loop_mode_label = ui.label("Loop mode: —").classes("text-caption q-mb-sm")
-        with ui.row().classes("items-end q-gutter-md wrap"):
-            self._power_input = ui.number("Power setpoint", format="%.3f")
-            self._power_unit_select = ui.select(
-                label="Power unit",
-                options=POWER_UNIT_OPTIONS,
+        with ui.grid(columns=2).classes("w-full q-gutter-sm laser-regulation"):
+            self._power_input = (
+                ui.number("Power setpoint", format="%.3f")
+                .props("outlined stack-label")
+                .classes("w-full")
             )
-            self._current_input = ui.number("Current (mA)", format="%.2f")
-            ui.button("Apply regulation", icon="tune", on_click=self._on_apply_regulation)
+            self._power_unit_select = (
+                ui.select(
+                    label="Power unit",
+                    options=POWER_UNIT_OPTIONS,
+                )
+                .props("outlined stack-label")
+                .classes("w-full")
+            )
+            self._current_input = (
+                ui.number("Current (mA)", format="%.2f")
+                .props("outlined stack-label")
+                .classes("w-full")
+            )
+            with ui.row().classes("w-full items-center"):
+                ui.button("Apply regulation", icon="tune", on_click=self._on_apply_regulation)
 
     def _build_tuning(self) -> None:
-        _section_title("Wavelength tuning")
-        with ui.row().classes("items-end q-gutter-md wrap"):
-            self._tuning_domain_select = ui.select(
-                label="Tuning domain",
-                options=TUNING_DOMAIN_OPTIONS,
+        self._tuning_section_title = _section_title("Tuning")
+        self._tuning_domain_toggle = (
+            ui.toggle(
+                TUNING_DOMAIN_OPTIONS,
+                value=int(TuningDomain.WAVELENGTH),
+                on_change=self._on_tuning_domain_change,
             )
-            self._tune_input = ui.number("Tune setpoint", format="%.4f")
-            self._modulation_select = ui.select(
-                label="Modulation",
-                options=MODULATION_OPTIONS,
+            .props("spread toggle-color=primary no-caps")
+            .classes("w-full")
+        )
+        with ui.grid(columns=2).classes("w-full q-gutter-sm laser-tuning"):
+            self._tune_input = (
+                ui.number("Tune setpoint", format="%.4f")
+                .props("outlined stack-label")
+                .classes("w-full")
             )
-            ui.button("Apply tuning", icon="waves", on_click=self._on_apply_tuning)
+            self._modulation_select = (
+                ui.select(
+                    label="Modulation",
+                    options=MODULATION_OPTIONS,
+                )
+                .props("outlined stack-label")
+                .classes("w-full")
+            )
+            with ui.row().classes("w-full items-center"):
+                ui.button(
+                    "Set center wavelength",
+                    icon="vertical_align_center",
+                    on_click=self._on_set_center_wavelength,
+                ).classes("q-mr-sm")
+                ui.button("Apply tuning", icon="waves", on_click=self._on_apply_tuning)
 
     def _build_scan(self) -> None:
         _section_title("Scan / sweep")
-        with ui.grid(columns=2).classes("w-full q-gutter-sm"):
-            self._scan_start_input = ui.number("Scan start", format="%.4f")
-            self._scan_stop_input = ui.number("Scan stop", format="%.4f")
-            self._scan_speed_input = ui.number("Scan speed", format="%.2f")
-            self._scan_cycles_input = ui.number("Scan cycles (-1 = ∞)", format="%.0f")
-            self._scan_dwell_input = ui.number("Dwell (ms)", format="%.1f")
-            self._scan_step_input = ui.number("Step size", format="%.4f")
-            self._scan_mode_select = ui.select(
-                label="Scan mode",
-                options=SCAN_MODE_OPTIONS,
+        field_props = "outlined stack-label"
+        with ui.grid(columns=2).classes("w-full q-gutter-sm laser-regulation"):
+            self._scan_start_input = (
+                ui.number("Scan start", format="%.4f").props(field_props).classes("w-full")
             )
+            self._scan_stop_input = (
+                ui.number("Scan stop", format="%.4f").props(field_props).classes("w-full")
+            )
+            self._scan_speed_input = (
+                ui.number("Scan speed", format="%.0f", step=1, precision=0)
+                .props(field_props)
+                .classes("w-full")
+            )
+            self._scan_cycles_input = (
+                ui.number("Scan cycles (-1 = ∞)", format="%.0f")
+                .props(field_props)
+                .classes("w-full")
+            )
+            self._scan_dwell_input = (
+                ui.number("Dwell (ms)", format="%.1f").props(field_props).classes("w-full")
+            )
+            self._scan_step_input = (
+                ui.number("Step size", format="%.4f").props(field_props).classes("w-full")
+            )
+            self._scan_mode_select = (
+                ui.select(label="Scan mode", options=SCAN_MODE_OPTIONS)
+                .props(field_props)
+                .classes("w-full")
+            )
+            self._trigger_polarity_select = (
+                ui.select(label="Trigger polarity", options=TRIGGER_POLARITY_OPTIONS)
+                .props(field_props)
+                .classes("w-full")
+            )
+        self._wire_scan_apply_on_enter()
         self._scan_cycles_count_label = ui.label("Cycles completed: —").classes("text-caption")
         with ui.row().classes("q-gutter-sm q-mt-sm"):
             ui.button("Apply scan params", on_click=self._on_apply_scan_params)
@@ -271,11 +374,170 @@ class LaserControlWidget:
     def _is_connected(self) -> bool:
         return self._controller is not None and self._controller.is_connected
 
+    def _wire_scan_apply_on_enter(self) -> None:
+        for field in (
+            self._scan_start_input,
+            self._scan_stop_input,
+            self._scan_speed_input,
+            self._scan_cycles_input,
+            self._scan_dwell_input,
+            self._scan_step_input,
+            self._scan_mode_select,
+            self._trigger_polarity_select,
+        ):
+            field.on("keydown.enter", self._on_apply_scan_params)
+
+    def _tuning_domain_from_ui(self) -> TuningDomain:
+        raw = self._tuning_domain_toggle.value
+        if raw is not None:
+            return TuningDomain(int(raw))
+        if self._is_connected() and self._controller.specs.tuning_domain is not None:
+            return self._controller.specs.tuning_domain
+        return TuningDomain.WAVELENGTH
+
+    def _sync_tuning_domain_labels(self, domain: TuningDomain) -> None:
+        title = "Frequency tuning" if is_frequency_domain(domain) else "Wavelength tuning"
+        self._tuning_section_title.set_text(title)
+
+    def _bind_tuning_and_scan_labels(
+        self,
+        bindings: ControlBindings,
+        domain: TuningDomain,
+    ) -> None:
+        self._sync_tuning_domain_labels(domain)
+        _bind_numeric(
+            self._tune_input,
+            bindings.tune,
+            label=tune_setpoint_label(domain),
+        )
+        _bind_numeric(
+            self._scan_start_input,
+            bindings.scan_start,
+            label=scan_bound_label("Scan start", domain),
+        )
+        _bind_numeric(
+            self._scan_stop_input,
+            bindings.scan_stop,
+            label=scan_bound_label("Scan stop", domain),
+        )
+        _bind_numeric(
+            self._scan_speed_input,
+            bindings.scan_speed,
+            label=scan_speed_label(domain),
+            as_integer=True,
+        )
+        _bind_numeric(
+            self._scan_step_input,
+            bindings.scan_step,
+            label=scan_step_label(domain),
+        )
+
+    def _update_scan_cycles_label(self, specs) -> None:
+        if specs.scan_cycles_count is not None:
+            self._scan_cycles_count_label.set_text(
+                f"Cycles completed: {specs.scan_cycles_count}"
+            )
+
+    def _sync_scan_fields_from_specs(self) -> None:
+        """Refresh scan/sweep controls from cached specs."""
+        specs = self._controller.specs
+        bindings = bindings_from_specs(specs)
+        domain = (
+            specs.tuning_domain
+            if specs.tuning_domain is not None
+            else self._tuning_domain_from_ui()
+        )
+        self._updating_controls = True
+        try:
+            self._bind_tuning_and_scan_labels(bindings, domain)
+            _bind_numeric(self._scan_cycles_input, bindings.scan_cycles)
+            _bind_numeric(self._scan_dwell_input, bindings.scan_dwell_ms)
+            self._scan_mode_select.set_enabled(bindings.scan_mode.enabled)
+            if bindings.scan_mode.value is not None:
+                self._scan_mode_select.set_value(bindings.scan_mode.value)
+            self._trigger_polarity_select.set_enabled(bindings.trigger_polarity.enabled)
+            if bindings.trigger_polarity.value is not None:
+                self._trigger_polarity_select.set_value(bindings.trigger_polarity.value)
+            self._update_scan_cycles_label(specs)
+        finally:
+            self._updating_controls = False
+
+    def _collect_scan_params_from_ui(
+        self,
+        *,
+        omit_step: bool = False,
+    ) -> tuple[Optional[StatusMessage], dict[str, object]]:
+        b = self._controller.bindings
+        specs = self._controller.specs
+        start = _numeric_value(self._scan_start_input) if b.scan_start.enabled else None
+        stop = _numeric_value(self._scan_stop_input) if b.scan_stop.enabled else None
+        if start is not None and stop is not None and start > stop:
+            start_changing = (
+                specs.scan_start is None or abs(float(start) - float(specs.scan_start)) > 1e-6
+            )
+            stop_changing = (
+                specs.scan_stop is None or abs(float(stop) - float(specs.scan_stop)) > 1e-6
+            )
+            if start_changing or stop_changing:
+                return (
+                    StatusMessage.failure(
+                        f"Scan start ({start}) must be ≤ scan stop ({stop})."
+                    ),
+                    {},
+                )
+        mode = (
+            ScanMode(int(self._scan_mode_select.value))
+            if b.scan_mode.enabled and self._scan_mode_select.value is not None
+            else None
+        )
+        trigger_polarity = (
+            TriggerPolarity(int(self._trigger_polarity_select.value))
+            if b.trigger_polarity.enabled and self._trigger_polarity_select.value is not None
+            else None
+        )
+        cycles_raw = _numeric_value(self._scan_cycles_input)
+        cycles_val = int(cycles_raw) if cycles_raw is not None else None
+        step = (
+            None
+            if omit_step
+            else (_numeric_value(self._scan_step_input) if b.scan_step.enabled else None)
+        )
+        return None, {
+            "start": start,
+            "stop": stop,
+            "speed": _integer_value(self._scan_speed_input) if b.scan_speed.enabled else None,
+            "cycles": cycles_val if b.scan_cycles.enabled else None,
+            "dwell_ms": _numeric_value(self._scan_dwell_input) if b.scan_dwell_ms.enabled else None,
+            "step": step,
+            "mode": mode,
+            "trigger_polarity": trigger_polarity,
+        }
+
+    async def _apply_scan_params_from_ui(self, *, log: bool = True) -> StatusMessage:
+        error, kwargs = self._collect_scan_params_from_ui()
+        if error is not None:
+            if log:
+                self._log(error, "scan params")
+            return error
+        status = await run.io_bound(
+            lambda: self._controller.apply_scan_params(**kwargs)
+        )
+        if log:
+            self._log(status, "scan params")
+        if status.ok and "No scan parameter changes" not in status.summary:
+            self._sync_scan_fields_from_specs()
+        return status
+
     # --- Specs → UI ---
 
     def _apply_specs_to_ui(self) -> None:
         specs = self._controller.specs
         bindings = bindings_from_specs(specs)
+        domain = (
+            specs.tuning_domain
+            if specs.tuning_domain is not None
+            else TuningDomain.WAVELENGTH
+        )
         self._updating_controls = True
         try:
             identity = specs.identity
@@ -293,30 +555,31 @@ class LaserControlWidget:
                     f"Loop mode: {LOOP_MODE_LABELS.get(int(specs.loop_mode), specs.loop_mode)}"
                 )
 
-            _bind_numeric(self._power_input, bindings.power)
+            _bind_numeric(self._power_input, bindings.power, label="Power setpoint")
             self._power_unit_select.set_enabled(bindings.power_unit.enabled)
             if bindings.power_unit.value is not None:
                 self._power_unit_select.set_value(bindings.power_unit.value)
 
             _bind_numeric(self._current_input, bindings.current)
-            _bind_numeric(self._tune_input, bindings.tune)
-            self._tuning_domain_select.set_enabled(bindings.tuning_domain.enabled)
+            self._tuning_domain_toggle.set_enabled(bindings.tuning_domain.enabled)
             if bindings.tuning_domain.value is not None:
-                self._tuning_domain_select.set_value(bindings.tuning_domain.value)
+                self._tuning_domain_toggle.set_value(bindings.tuning_domain.value)
+
+            self._bind_tuning_and_scan_labels(bindings, domain)
 
             self._modulation_select.set_enabled(bindings.modulation.enabled)
             if bindings.modulation.value is not None:
                 self._modulation_select.set_value(bindings.modulation.value)
 
-            _bind_numeric(self._scan_start_input, bindings.scan_start)
-            _bind_numeric(self._scan_stop_input, bindings.scan_stop)
-            _bind_numeric(self._scan_speed_input, bindings.scan_speed)
             _bind_numeric(self._scan_cycles_input, bindings.scan_cycles)
             _bind_numeric(self._scan_dwell_input, bindings.scan_dwell_ms)
-            _bind_numeric(self._scan_step_input, bindings.scan_step)
             self._scan_mode_select.set_enabled(bindings.scan_mode.enabled)
             if bindings.scan_mode.value is not None:
                 self._scan_mode_select.set_value(bindings.scan_mode.value)
+            self._trigger_polarity_select.set_enabled(bindings.trigger_polarity.enabled)
+            if bindings.trigger_polarity.value is not None:
+                self._trigger_polarity_select.set_value(bindings.trigger_polarity.value)
+            self._update_scan_cycles_label(specs)
 
             self._laser_switch.set_value(bindings.laser_output)
             self._interlock_switch.set_value(bindings.software_interlock_inhibit)
@@ -348,9 +611,7 @@ class LaserControlWidget:
         if specs.operating_hours is not None:
             self._hours_label.set_text(f"Operating hours: {specs.operating_hours:.1f} h")
         if specs.scan_cycles_count is not None:
-            self._scan_cycles_count_label.set_text(
-                f"Cycles completed: {specs.scan_cycles_count}"
-            )
+            self._update_scan_cycles_label(specs)
 
     def _update_telemetry_snapshot(self, snap: TelemetrySnapshot) -> None:
         if snap.laser_diode_temperature is not None:
@@ -401,6 +662,16 @@ class LaserControlWidget:
             self._telemetry_running = False
 
     # --- Command handlers ---
+
+    async def _on_check_errors(self) -> None:
+        if self._serial_handler_busy or not self._is_connected():
+            return
+        self._serial_handler_busy = True
+        try:
+            status = await run.io_bound(self._controller.check_errors)
+            self._log(status, "errors")
+        finally:
+            self._serial_handler_busy = False
 
     async def _on_laser_output(self, event) -> None:
         if (
@@ -476,6 +747,64 @@ class LaserControlWidget:
             return
         self._apply_specs_to_ui()
 
+    async def _on_tuning_domain_change(self, event) -> None:
+        if (
+            self._updating_controls
+            or not self._switch_handlers_enabled
+            or self._serial_handler_busy
+            or not self._is_connected()
+        ):
+            return
+        domain = TuningDomain(int(event.value))
+        previous = (
+            int(self._controller.specs.tuning_domain)
+            if self._controller.specs.tuning_domain is not None
+            else int(TuningDomain.WAVELENGTH)
+        )
+        if int(domain) == previous:
+            return
+
+        self._serial_handler_busy = True
+        try:
+            status = await run.io_bound(self._controller.apply_tuning_domain, domain)
+            self._log(status, "tuning domain")
+            if status.ok:
+                self._apply_specs_to_ui()
+            else:
+                self._updating_controls = True
+                try:
+                    self._tuning_domain_toggle.set_value(previous)
+                finally:
+                    self._updating_controls = False
+        finally:
+            self._serial_handler_busy = False
+
+    async def _on_set_center_wavelength(self) -> None:
+        if not self._is_connected():
+            return
+        specs = self._controller.specs
+        if specs.wavelength_min is None or specs.wavelength_max is None:
+            self._log(
+                StatusMessage.failure(
+                    "Wavelength range not available (wmin?/wmax? missing)."
+                ),
+                "center wavelength",
+            )
+            return
+
+        center = (specs.wavelength_min + specs.wavelength_max) / 2.0
+        self._serial_handler_busy = True
+        self._log(StatusMessage.success("Setting center wavelength…"), "center wavelength")
+        try:
+            status = await run.io_bound(
+                lambda: self._controller.apply_tune(center, wait=True)
+            )
+            self._log(status, "center wavelength")
+            if status.ok:
+                self._apply_specs_to_ui()
+        finally:
+            self._serial_handler_busy = False
+
     async def _on_apply_tuning(self) -> None:
         if not self._is_connected():
             return
@@ -487,15 +816,11 @@ class LaserControlWidget:
                 self._log(StatusMessage.failure("Tune setpoint is empty."), "tuning")
                 return
 
-        domain: Optional[TuningDomain] = None
-        if self._tuning_domain_select.value is not None:
-            domain = TuningDomain(int(self._tuning_domain_select.value))
-
         modulation: Optional[ModulationSource] = None
         if bindings.modulation.enabled and self._modulation_select.value is not None:
             modulation = ModulationSource(int(self._modulation_select.value))
 
-        if domain is None and tune_value is None and modulation is None:
+        if tune_value is None and modulation is None:
             self._log(StatusMessage.failure("No tuning parameters to apply."), "tuning")
             return
 
@@ -504,7 +829,6 @@ class LaserControlWidget:
         try:
             status = await run.io_bound(
                 lambda: self._controller.apply_tuning(
-                    domain=domain,
                     tune_nm=tune_value,
                     modulation=modulation,
                     wait_tune=True,
@@ -521,54 +845,46 @@ class LaserControlWidget:
     async def _on_apply_scan_params(self) -> None:
         if not self._is_connected():
             return
-        b = self._controller.bindings
-        start = _numeric_value(self._scan_start_input) if b.scan_start.enabled else None
-        stop = _numeric_value(self._scan_stop_input) if b.scan_stop.enabled else None
-        if start is not None and stop is not None and start > stop:
-            self._log(
-                StatusMessage.failure(f"Scan start ({start}) must be ≤ scan stop ({stop})."),
-                "scan params",
-            )
-            return
-        mode = (
-            ScanMode(int(self._scan_mode_select.value))
-            if b.scan_mode.enabled and self._scan_mode_select.value is not None
-            else None
-        )
-        cycles_raw = _numeric_value(self._scan_cycles_input)
-        cycles_val = int(cycles_raw) if cycles_raw is not None else None
         self._serial_handler_busy = True
         try:
-            status = await run.io_bound(
-                lambda: self._controller.apply_scan_params(
-                    start=start,
-                    stop=stop,
-                    speed=_numeric_value(self._scan_speed_input) if b.scan_speed.enabled else None,
-                    cycles=cycles_val if b.scan_cycles.enabled else None,
-                    dwell_ms=_numeric_value(self._scan_dwell_input) if b.scan_dwell_ms.enabled else None,
-                    step=_numeric_value(self._scan_step_input) if b.scan_step.enabled else None,
-                    mode=mode,
-                )
-            )
-            self._log(status, "scan params")
-            if status.ok:
-                self._apply_specs_to_ui()
+            await self._apply_scan_params_from_ui()
         finally:
             self._serial_handler_busy = False
 
     async def _on_start_scan(self) -> None:
         if not self._is_connected():
             return
-        status = await run.io_bound(self._controller.start_scan)
-        self._log(status, "start scan")
-        self._apply_specs_to_ui()
+        self._serial_handler_busy = True
+        try:
+            error, kwargs = self._collect_scan_params_from_ui(omit_step=True)
+            if error is not None:
+                self._log(error, "start scan")
+                return
+            apply_status = await run.io_bound(
+                lambda: self._controller.apply_scan_params(**kwargs)
+            )
+            if not apply_status.ok:
+                if "No scan parameter changes" in apply_status.summary:
+                    pass
+                elif apply_status.command in ("spd", "dwl", "step") or "must be ≤" in apply_status.summary:
+                    self._log(apply_status, "start scan")
+                    return
+                else:
+                    self._log(apply_status, "start scan (params)")
+            status = await run.io_bound(self._controller.start_scan)
+            self._log(status, "start scan")
+            if status.ok:
+                self._update_scan_cycles_label(self._controller.specs)
+        finally:
+            self._serial_handler_busy = False
 
     async def _on_abort_scan(self) -> None:
         if not self._is_connected():
             return
         status = await run.io_bound(self._controller.abort_scan)
         self._log(status, "abort scan")
-        self._apply_specs_to_ui()
+        if status.ok:
+            self._update_scan_cycles_label(self._controller.specs)
 
     def shutdown(self) -> None:
         """Release serial port on app exit (Ctrl+C / window close)."""

@@ -97,6 +97,13 @@ TUNING_DOMAIN_SPEC_FIELDS: tuple[SpecField, ...] = (
     "tuning_domain",
     "wavelength_min",
     "wavelength_max",
+    "tune_setpoint",
+    "scan_start",
+    "scan_stop",
+    "scan_step_size",
+    "scan_speed",
+    "scan_speed_min",
+    "scan_speed_max",
 )
 
 SCAN_SPEED_SPEC_FIELDS: tuple[SpecField, ...] = (

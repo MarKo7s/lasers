@@ -15,6 +15,7 @@ from newfocus.tlb8800_utilities.types import (
     ModulationSource,
     PowerUnit,
     ScanMode,
+    TriggerPolarity,
     TuningDomain,
 )
 
@@ -118,6 +119,42 @@ class TLB8800Controller:
             )
 
         return self._execute_serial("refresh_telemetry", work)
+
+    def check_errors(self) -> StatusMessage:
+        """Query ``errcnt?``; if count > 0, read and clear ``err?`` with descriptions."""
+
+        def work() -> StatusMessage:
+            from newfocus.tlb8800_utilities.errors import error_description
+
+            try:
+                count = int(self.laser.read.error_count())
+            except Exception as exc:
+                return StatusMessage.failure(f"errcnt? failed: {exc}", command="errcnt?")
+
+            if count <= 0:
+                return StatusMessage.success("No errors (errcnt=0)", command="errcnt?")
+
+            try:
+                codes = [c for c in self.laser.read.all_error_codes() if c != 0]
+            except Exception as exc:
+                return StatusMessage.failure(
+                    f"errcnt={count} but err? failed: {exc}",
+                    command="err?",
+                )
+
+            if not codes:
+                return StatusMessage.success(
+                    f"errcnt={count} but err? returned no non-zero codes",
+                    command="err?",
+                )
+
+            parts = [f"{c}: {error_description(c)}" for c in codes]
+            return StatusMessage.failure(
+                f"errcnt={count} — " + "; ".join(parts),
+                command="err?",
+            )
+
+        return self._execute_serial("check_errors", work)
 
     def apply_laser_output(self, enabled: bool) -> StatusMessage:
         def work() -> StatusMessage:
@@ -308,9 +345,10 @@ class TLB8800Controller:
         )
 
     def apply_scan_speed(self, speed: Union[int, float]) -> StatusMessage:
+        speed_int = int(round(float(speed)))
         return self._execute_serial(
             "scan_speed",
-            lambda: self._apply_scan_field(self.laser.set.scan_speed(speed), "scan_speed"),
+            lambda: self._apply_scan_field(self.laser.set.scan_speed(speed_int), "scan_speed"),
         )
 
     def apply_scan_cycles(self, cycles: int) -> StatusMessage:
@@ -351,6 +389,7 @@ class TLB8800Controller:
         dwell_ms: Optional[float] = None,
         step: Optional[float] = None,
         mode: Optional[ScanMode] = None,
+        trigger_polarity: Optional[TriggerPolarity] = None,
     ) -> StatusMessage:
         def work() -> StatusMessage:
             specs = self.specs
@@ -378,7 +417,14 @@ class TLB8800Controller:
                     command = status.command
                 failures.append(f"{name}: {status.summary}")
 
-            if start is not None and stop is not None and float(start) > float(stop):
+            start_changing = start is not None and _changed(start, specs.scan_start)
+            stop_changing = stop is not None and _changed(stop, specs.scan_stop)
+            if (
+                start is not None
+                and stop is not None
+                and (start_changing or stop_changing)
+                and float(start) > float(stop)
+            ):
                 return StatusMessage.failure(
                     f"Scan start ({start}) must be ≤ scan stop ({stop})",
                     command="scan params",
@@ -387,22 +433,23 @@ class TLB8800Controller:
             current_mode = int(specs.scan_mode) if specs.scan_mode is not None else None
             target_mode = int(mode) if mode is not None else current_mode
 
-            if start is not None and _changed(start, specs.scan_start):
+            if start_changing:
                 _step("scan start", self.laser.set.scan_start(start), "scan_start")
-            if stop is not None and _changed(stop, specs.scan_stop):
+            if stop_changing:
                 _step("scan stop", self.laser.set.scan_stop(stop), "scan_stop")
             if speed is not None and _changed(speed, specs.scan_speed):
-                if specs.scan_speed_min is not None and speed < specs.scan_speed_min:
+                speed_int = int(round(float(speed)))
+                if specs.scan_speed_min is not None and speed_int < specs.scan_speed_min:
                     return StatusMessage.failure(
-                        f"Scan speed {speed} below minimum {specs.scan_speed_min}",
+                        f"Scan speed {speed_int} below minimum {specs.scan_speed_min}",
                         command="spd",
                     )
-                if specs.scan_speed_max is not None and speed > specs.scan_speed_max:
+                if specs.scan_speed_max is not None and speed_int > specs.scan_speed_max:
                     return StatusMessage.failure(
-                        f"Scan speed {speed} above maximum {specs.scan_speed_max}",
+                        f"Scan speed {speed_int} above maximum {specs.scan_speed_max}",
                         command="spd",
                     )
-                _step("scan speed", self.laser.set.scan_speed(speed), "scan_speed")
+                _step("scan speed", self.laser.set.scan_speed(speed_int), "scan_speed")
             if dwell_ms is not None and _changed(dwell_ms, specs.scan_dwell_time_ms):
                 if dwell_ms < 0:
                     return StatusMessage.failure(
@@ -426,18 +473,27 @@ class TLB8800Controller:
                     current_mode = int(mode)
                     target_mode = current_mode
 
+            if trigger_polarity is not None:
+                current_polarity = (
+                    int(specs.trigger_polarity)
+                    if specs.trigger_polarity is not None
+                    else None
+                )
+                if current_polarity != int(trigger_polarity):
+                    _step(
+                        "trigger polarity",
+                        self.laser.set.trigger_polarity(trigger_polarity),
+                        "trigger_polarity",
+                    )
+
             if step is not None and _changed(step, specs.scan_step_size):
                 if step <= 0:
                     return StatusMessage.failure(
                         f"Scan step must be > 0 (got {step})",
                         command="step",
                     )
-                if target_mode != int(ScanMode.AUTOMATIC_STEP):
-                    return StatusMessage.failure(
-                        "Scan step size only applies when scan mode is Automatic step",
-                        command="scan params",
-                    )
-                _step("scan step", self.laser.set.scan_step_size(step), "scan_step_size")
+                if target_mode == int(ScanMode.AUTOMATIC_STEP):
+                    _step("scan step", self.laser.set.scan_step_size(step), "scan_step_size")
 
             if applied == 0:
                 return StatusMessage.success("No scan parameter changes to apply", command=command)

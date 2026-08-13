@@ -1,0 +1,42 @@
+[project]
+name = "lasers"
+version = "1.0.0"
+description = "New Focus TLB-8800 laser control (USB serial) + GUI widgets"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+nicegui = ["nicegui>=2.0"]
+pyside = ["PySide6>=6.0"]
+notebooks = ["jupyter>=1.0", "ipykernel>=6.0"]
+ui = [
+  "nicegui>=2.0",
+  "PySide6>=6.0",
+]
+
+[project.urls]
+Repository = "https://github.com/MarKo7s/lasers"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+  "lasers",
+  "core",
+  "core.tlb8800",
+  "newfocus",
+  "newfocus.tlb8800_utilities",
+  "ui",
+  "ui.nicegui",
+  "ui.pyside",
+]
+py-modules = ["discovery"]
+
+[tool.setuptools.package-data]
+"lasers" = ["supported_models.json"]
+
