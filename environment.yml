@@ -5,4 +5,4 @@ dependencies:
   - python=3.11
   - pip
   - pip:
-      - "lasers[ui,notebooks] @ git+https://github.com/MarKo7s/lasers.git@v2.0.0"
+      - "lasers[ui,notebooks] @ git+https://github.com/MarKo7s/lasers.git@v2.0.1"

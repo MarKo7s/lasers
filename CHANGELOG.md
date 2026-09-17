@@ -4,6 +4,12 @@ All notable changes to lasers are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.0.1] - 2026-09-17
+
+### Changed
+
+- PySide and NiceGUI windows use the title **Laser Controller** (including `LaserControlWidget()` shown from Jupyter)
+
 ## [2.0.0] - 2026-09-17
 
 ### Added

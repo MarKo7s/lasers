@@ -26,7 +26,7 @@ Pip name is **`lasers`**; after install, import as **`laser`**.
 From GitHub (pinned tag):
 
 ```bash
-pip install "lasers[ui,notebooks] @ git+https://github.com/MarKo7s/lasers.git@v2.0.0"
+pip install "lasers[ui,notebooks] @ git+https://github.com/MarKo7s/lasers.git@v2.0.1"
 ```
 
 Editable checkout (from the `Laser` folder):
@@ -544,7 +544,7 @@ Open `discover_lasers.ipynb` from the project folder with the `lasers_env` kerne
 
 - Version source of truth: `pyproject.toml` (`[project].version`)
 - Changelog: `CHANGELOG.md`
-- Git tags: `vX.Y.Z` (example: `v2.0.0`)
+- Git tags: `vX.Y.Z` (example: `v2.0.1`)
 - `__init__.py` reads version from installed metadata (`importlib.metadata.version("lasers")`)
 - Do not hand-edit `__init__.py` version except as a source-tree fallback
 
@@ -559,5 +559,5 @@ This pushes `main`, creates annotated tag `v{version}` from `pyproject.toml`, an
 Optional GitHub Release:
 
 ```bash
-gh release create v2.0.0 --title "lasers 2.0.0" --notes-file CHANGELOG.md
+gh release create v2.0.1 --title "lasers 2.0.1" --notes-file CHANGELOG.md
 ```

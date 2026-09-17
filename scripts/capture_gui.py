@@ -24,7 +24,7 @@ def build_window():
     ensure_qapp()
     widget = create_laser_widget()
     window = QMainWindow()
-    window.setWindowTitle("Laser Control (PySide6)")
+    window.setWindowTitle("Laser Controller")
     window.setCentralWidget(widget)
     window.resize(1100, 900)
     window.show()

@@ -34,7 +34,7 @@ def main() -> None:
     atexit.register(_cleanup_laser_connection)
     app.on_shutdown(_cleanup_laser_connection)
     ui.run(
-        title="Laser Control",
+        title="Laser Controller",
         reload=False,
         port=8080,
     )

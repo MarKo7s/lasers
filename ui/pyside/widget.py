@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional
 
 from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -96,6 +97,7 @@ def ensure_qapp() -> QApplication:
 class LaserControlWidget(QWidget):
     """Full laser control widget (PySide6)."""
 
+    _WINDOW_TITLE = "Laser Controller"
     _TELEMETRY_INTERVAL_MS = 5000
 
     def __init__(
@@ -106,6 +108,7 @@ class LaserControlWidget(QWidget):
     ) -> None:
         ensure_qapp()
         super().__init__(parent)
+        self.setWindowTitle(self._WINDOW_TITLE)
         self._discovery = DiscoveryService()
         self._controller = None
         self._devices: list[DiscoveredDevice] = []
@@ -131,6 +134,12 @@ class LaserControlWidget(QWidget):
         else:
             self._set_controls_enabled(False)
             QTimer.singleShot(50, self._on_refresh)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        top = self.window()
+        if top is not None:
+            top.setWindowTitle(self._WINDOW_TITLE)
 
     @property
     def laser(self) -> Optional[TLB8800]:
