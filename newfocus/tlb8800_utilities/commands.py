@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from laser.newfocus.tlb8800_utilities.protocol import format_legacy_float
+
 from typing import Union
 
-from newfocus.tlb8800_utilities.errors import CommandResult, TLB8800ParseError, parse_error_codes
-from newfocus.tlb8800_utilities.idn import parse_idn
-from newfocus.tlb8800_utilities.types import (
+from laser.newfocus.tlb8800_utilities.errors import CommandResult, TLB8800ParseError, parse_error_codes
+from laser.newfocus.tlb8800_utilities.idn import parse_idn
+from laser.newfocus.tlb8800_utilities.types import (
     FanSpeed,
     InterlockState,
     LaserIdentity,
@@ -195,19 +197,19 @@ class TLBSetCommands:
         return self._laser._command(f"laz {1 if enabled else 0}")
 
     def power(self, value: Union[int, float]) -> CommandResult:
-        return self._laser._command(f"pwr {value}")
+        return self._laser._command(f"pwr {format_legacy_float(value)}")
 
     def power_unit(self, unit: PowerUnit) -> CommandResult:
         return self._laser._command(f"pwru {int(unit)}")
 
     def current(self, milliamps: Union[int, float]) -> CommandResult:
-        return self._laser._command(f"crnt {milliamps}")
+        return self._laser._command(f"crnt {format_legacy_float(milliamps)}")
 
     def tuning_domain(self, domain: TuningDomain) -> CommandResult:
         return self._laser._command(f"unit {int(domain)}")
 
     def tune(self, setpoint: Union[int, float], *, wait: bool = True) -> CommandResult:
-        result = self._laser._command(f"wave {setpoint}")
+        result = self._laser._command(f"wave {format_legacy_float(setpoint)}")
         if wait and result.ok:
             self._laser.wait_until_complete()
         return result
@@ -216,19 +218,19 @@ class TLBSetCommands:
         return self._laser._command(f"sms {int(source)}")
 
     def scan_start(self, setpoint: Union[int, float]) -> CommandResult:
-        return self._laser._command(f"str {setpoint}")
+        return self._laser._command(f"str {format_legacy_float(setpoint)}")
 
     def scan_start_acceleration_offset(self, offset: Union[int, float]) -> CommandResult:
         return self._laser._command(f"staccoff {offset}")
 
     def scan_stop(self, setpoint: Union[int, float]) -> CommandResult:
-        return self._laser._command(f"stop {setpoint}")
+        return self._laser._command(f"stop {format_legacy_float(setpoint)}")
 
     def scan_stop_deceleration_offset(self, offset: Union[int, float]) -> CommandResult:
         return self._laser._command(f"stdecoff {offset}")
 
     def scan_step_size(self, step: Union[int, float]) -> CommandResult:
-        return self._laser._command(f"step {step}")
+        return self._laser._command(f"step {format_legacy_float(step)}")
 
     def scan_mode(self, mode: ScanMode) -> CommandResult:
         return self._laser._command(f"mode {int(mode)}")
@@ -237,7 +239,7 @@ class TLBSetCommands:
         return self._laser._command(f"spd {int(round(float(speed)))}")
 
     def scan_dwell_time_ms(self, dwell_ms: Union[int, float]) -> CommandResult:
-        return self._laser._command(f"dwl {dwell_ms}")
+        return self._laser._command(f"dwl {format_legacy_float(dwell_ms)}")
 
     def scan_cycles(self, cycles: int) -> CommandResult:
         """Use ``cycles=-1`` for infinite iterations."""

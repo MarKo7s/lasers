@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from nicegui import run, ui
 
-from core.discovery_service import DiscoveryService
-from core.factory import create_laser_controller
-from core.models import DiscoveredDevice, StatusMessage
-from core.tlb8800 import (
+from laser.core.discovery_service import DiscoveryService
+from laser.core.factory import create_laser_controller
+from laser.core.models import DiscoveredDevice, StatusMessage
+from laser.core.tlb8800 import (
     INTERLOCK_LABELS,
     LOOP_MODE_LABELS,
     MODULATION_OPTIONS,
@@ -23,80 +23,155 @@ from core.tlb8800 import (
     TelemetrySnapshot,
     TLB8800Controller,
     bindings_from_specs,
+    identity_display,
     is_frequency_domain,
+    numeric_field_label,
     scan_bound_label,
     scan_speed_label,
     scan_step_label,
+    tune_click_step,
     tune_setpoint_label,
 )
-from newfocus.tlb8800_utilities.types import (
+from laser.newfocus.tlb8800_utilities.types import (
     ModulationSource,
     PowerUnit,
     ScanMode,
     TriggerPolarity,
     TuningDomain,
 )
-from ui.nicegui.theme import apply_laser_theme, laser_header
+from laser.ui.nicegui.theme import apply_laser_theme, laser_header
 
 
-def _numeric_field_label(
-    base: str,
+def _clamp_float(value: float, minimum: Optional[float], maximum: Optional[float]) -> float:
+    if minimum is not None and value < minimum:
+        value = float(minimum)
+    if maximum is not None and value > maximum:
+        value = float(maximum)
+    return value
+
+
+def _notify_nudge(field) -> None:
+    callback = getattr(field, "_laser_on_nudge", None)
+    if callable(callback):
+        callback()
+
+
+def _format_float_text(value: float, *, as_integer: bool = False) -> str:
+    if as_integer:
+        return str(int(round(float(value))))
+    text = f"{float(value):.6f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _parse_float_text(raw: object) -> Optional[float]:
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _attach_text_float_clickers(field: ui.input, *, click_step: float = 1.0) -> ui.input:
+    """Same arrows on every numeric cell: type any float; buttons/keys change by click_step."""
+    field._laser_click_step = click_step  # type: ignore[attr-defined]
+    field.classes("laser-float-number")
+
+    def _step(sign: int) -> None:
+        current = _parse_float_text(field.value) or 0.0
+        delta = sign * float(getattr(field, "_laser_click_step", 1.0))
+        new = _clamp_float(
+            current + delta,
+            getattr(field, "_laser_min", None),
+            getattr(field, "_laser_max", None),
+        )
+        as_integer = bool(getattr(field, "_laser_integer", False))
+        if as_integer:
+            new = float(int(round(new)))
+        field.set_value(_format_float_text(new, as_integer=as_integer))
+        _notify_nudge(field)
+
+    field.on("keydown.up.prevent", lambda _e: _step(1))
+    field.on("keydown.down.prevent", lambda _e: _step(-1))
+    with field.add_slot("append"):
+        with ui.column().classes("laser-step-btns q-gutter-none"):
+            ui.button(icon="arrow_drop_up", on_click=lambda: _step(1)).props(
+                "flat dense round size=xs"
+            )
+            ui.button(icon="arrow_drop_down", on_click=lambda: _step(-1)).props(
+                "flat dense round size=xs"
+            )
+    return field
+
+
+def _make_numeric_field(label: str, *, click_step: float = 1.0) -> ui.input:
+    return _attach_text_float_clickers(
+        ui.input(label).props("outlined stack-label").classes("w-full"),
+        click_step=click_step,
+    )
+
+
+def _bind_text_float(
+    field: ui.input,
     binding: NumericBinding,
     *,
-    as_integer: bool = False,
-) -> str:
-    def _fmt(value: float) -> str:
-        return str(int(round(value))) if as_integer else f"{value:g}"
-
-    if binding.minimum is not None and binding.maximum is not None:
-        return f"{base} ({_fmt(binding.minimum)} – {_fmt(binding.maximum)})"
-    if binding.minimum is not None:
-        return f"{base} (≥ {_fmt(binding.minimum)})"
-    if binding.maximum is not None:
-        return f"{base} (≤ {_fmt(binding.maximum)})"
-    return base
-
-
-def _bind_numeric(
-    field: ui.number,
-    binding: NumericBinding,
-    *,
-    label: str | None = None,
+    label: str,
+    click_step: float,
     sync_value: bool = True,
     as_integer: bool = False,
 ) -> None:
-    """Apply bounds via NiceGUI's float min/max API (not .props(), which stores strings)."""
-    if binding.minimum is not None:
-        field.min = float(binding.minimum)
-    else:
-        field._props.pop("min", None)
-
-    if binding.maximum is not None:
-        field.max = float(binding.maximum)
-    else:
-        field._props.pop("max", None)
-
-    field._props.set_optional("step", float(binding.step))
     field.set_enabled(binding.enabled)
-    if label is not None:
-        field.set_label(_numeric_field_label(label, binding, as_integer=as_integer))
-    if sync_value and binding.value is not None:
-        value = int(round(binding.value)) if as_integer else float(binding.value)
-        field.set_value(value)
+    field.set_label(numeric_field_label(label, binding, as_integer=as_integer))
+    field._laser_click_step = click_step  # type: ignore[attr-defined]
+    field._laser_min = binding.minimum  # type: ignore[attr-defined]
+    field._laser_max = binding.maximum  # type: ignore[attr-defined]
+    field._laser_integer = as_integer  # type: ignore[attr-defined]
+    if not sync_value:
+        return
+    if binding.value is not None:
+        field.set_value(_format_float_text(binding.value, as_integer=as_integer))
+    elif not binding.enabled:
+        field.set_value("")
 
 
-def _integer_value(field: ui.number) -> Optional[int]:
+def _integer_value(field: ui.input) -> Optional[int]:
     raw = _numeric_value(field)
     if raw is None:
         return None
     return int(round(raw))
 
 
-def _numeric_value(field: ui.number) -> Optional[float]:
+def _numeric_value(field: ui.input) -> Optional[float]:
     raw = field.value
     if raw is None or raw == "":
         return None
-    return float(raw)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _read_float_from_dom(field: ui.input) -> Optional[float]:
+    """Read the live <input> text so a commit does not use a stale value."""
+    try:
+        raw = await ui.run_javascript(
+            f"""
+            const el = getHtmlElement({field.id});
+            if (!el) return null;
+            const input = el.querySelector("input");
+            return (input ?? el).value ?? null;
+            """
+        )
+    except Exception:
+        raw = None
+    if raw is None:
+        return _numeric_value(field)
+    if str(raw).strip() == "":
+        return None
+    try:
+        return float(str(raw).strip())
+    except (TypeError, ValueError):
+        return _numeric_value(field)
 
 
 def _section_title(text: str) -> ui.label:
@@ -105,6 +180,19 @@ def _section_title(text: str) -> ui.label:
 
 class LaserControlWidget:
     """Full laser control panel for NiceGUI applications."""
+
+    _NUMERIC_COMMITS = (
+        # key, log action, field, binding, apply, spec readback, integer?
+        ("power", "power", "_power_input", "power", "apply_power", "power", False),
+        ("current", "current", "_current_input", "current", "apply_current", "current", False),
+        ("tune", "tune", "_tune_input", "tune", "apply_tune", "tune_setpoint", False),
+        ("scan_start", "scan start", "_scan_start_input", "scan_start", "apply_scan_start", "scan_start", False),
+        ("scan_stop", "scan stop", "_scan_stop_input", "scan_stop", "apply_scan_stop", "scan_stop", False),
+        ("scan_speed", "scan speed", "_scan_speed_input", "scan_speed", "apply_scan_speed", "scan_speed", True),
+        ("scan_cycles", "scan cycles", "_scan_cycles_input", "scan_cycles", "apply_scan_cycles", "scan_cycles", True),
+        ("scan_dwell", "scan dwell", "_scan_dwell_input", "scan_dwell_ms", "apply_scan_dwell", "scan_dwell_time_ms", False),
+        ("scan_step", "scan step", "_scan_step_input", "scan_step", "apply_scan_step", "scan_step_size", False),
+    )
 
     def __init__(self, *, parent: Optional[ui.element] = None) -> None:
         self._discovery = DiscoveryService()
@@ -116,6 +204,8 @@ class LaserControlWidget:
         self._updating_controls = False
         self._switch_handlers_enabled = False
         self._serial_handler_busy = False
+        self._commit_timers: dict[str, ui.timer] = {}
+        self._pending_commits: dict[str, Callable[[], Awaitable[None]]] = {}
 
         container = parent if parent is not None else ui.column().classes("w-full max-w-3xl mx-auto q-pa-md")
         with container:
@@ -178,11 +268,7 @@ class LaserControlWidget:
         _section_title("Regulation")
         self._loop_mode_label = ui.label("Loop mode: —").classes("text-caption q-mb-sm")
         with ui.grid(columns=2).classes("w-full q-gutter-sm laser-regulation"):
-            self._power_input = (
-                ui.number("Power setpoint", format="%.3f")
-                .props("outlined stack-label")
-                .classes("w-full")
-            )
+            self._power_input = _make_numeric_field("Power setpoint", click_step=0.01)
             self._power_unit_select = (
                 ui.select(
                     label="Power unit",
@@ -191,13 +277,7 @@ class LaserControlWidget:
                 .props("outlined stack-label")
                 .classes("w-full")
             )
-            self._current_input = (
-                ui.number("Current (mA)", format="%.2f")
-                .props("outlined stack-label")
-                .classes("w-full")
-            )
-            with ui.row().classes("w-full items-center"):
-                ui.button("Apply regulation", icon="tune", on_click=self._on_apply_regulation)
+            self._current_input = _make_numeric_field("Current (mA)", click_step=0.1)
 
     def _build_tuning(self) -> None:
         self._tuning_section_title = _section_title("Tuning")
@@ -211,11 +291,7 @@ class LaserControlWidget:
             .classes("w-full")
         )
         with ui.grid(columns=2).classes("w-full q-gutter-sm laser-tuning"):
-            self._tune_input = (
-                ui.number("Tune setpoint", format="%.4f")
-                .props("outlined stack-label")
-                .classes("w-full")
-            )
+            self._tune_input = _make_numeric_field("Tune setpoint")
             self._modulation_select = (
                 ui.select(
                     label="Modulation",
@@ -229,35 +305,18 @@ class LaserControlWidget:
                     "Set center wavelength",
                     icon="vertical_align_center",
                     on_click=self._on_set_center_wavelength,
-                ).classes("q-mr-sm")
-                ui.button("Apply tuning", icon="waves", on_click=self._on_apply_tuning)
+                )
 
     def _build_scan(self) -> None:
         _section_title("Scan / sweep")
         field_props = "outlined stack-label"
         with ui.grid(columns=2).classes("w-full q-gutter-sm laser-regulation"):
-            self._scan_start_input = (
-                ui.number("Scan start", format="%.4f").props(field_props).classes("w-full")
-            )
-            self._scan_stop_input = (
-                ui.number("Scan stop", format="%.4f").props(field_props).classes("w-full")
-            )
-            self._scan_speed_input = (
-                ui.number("Scan speed", format="%.0f", step=1, precision=0)
-                .props(field_props)
-                .classes("w-full")
-            )
-            self._scan_cycles_input = (
-                ui.number("Scan cycles (-1 = ∞)", format="%.0f")
-                .props(field_props)
-                .classes("w-full")
-            )
-            self._scan_dwell_input = (
-                ui.number("Dwell (ms)", format="%.1f").props(field_props).classes("w-full")
-            )
-            self._scan_step_input = (
-                ui.number("Step size", format="%.4f").props(field_props).classes("w-full")
-            )
+            self._scan_start_input = _make_numeric_field("Scan start")
+            self._scan_stop_input = _make_numeric_field("Scan stop")
+            self._scan_speed_input = _make_numeric_field("Scan speed")
+            self._scan_cycles_input = _make_numeric_field("Scan cycles (-1 = ∞)")
+            self._scan_dwell_input = _make_numeric_field("Dwell (ms)")
+            self._scan_step_input = _make_numeric_field("Step size")
             self._scan_mode_select = (
                 ui.select(label="Scan mode", options=SCAN_MODE_OPTIONS)
                 .props(field_props)
@@ -268,10 +327,9 @@ class LaserControlWidget:
                 .props(field_props)
                 .classes("w-full")
             )
-        self._wire_scan_apply_on_enter()
+        self._wire_live_commits()
         self._scan_cycles_count_label = ui.label("Cycles completed: —").classes("text-caption")
         with ui.row().classes("q-gutter-sm q-mt-sm"):
-            ui.button("Apply scan params", on_click=self._on_apply_scan_params)
             ui.button("Start scan", icon="play_arrow", color="positive", on_click=self._on_start_scan)
             ui.button("Abort scan", icon="stop", color="negative", on_click=self._on_abort_scan)
 
@@ -374,18 +432,140 @@ class LaserControlWidget:
     def _is_connected(self) -> bool:
         return self._controller is not None and self._controller.is_connected
 
-    def _wire_scan_apply_on_enter(self) -> None:
-        for field in (
-            self._scan_start_input,
-            self._scan_stop_input,
-            self._scan_speed_input,
-            self._scan_cycles_input,
-            self._scan_dwell_input,
-            self._scan_step_input,
-            self._scan_mode_select,
-            self._trigger_polarity_select,
+    def _wire_live_commits(self) -> None:
+        for key, _action, attr, *_rest in self._NUMERIC_COMMITS:
+            self._wire_live_numeric(getattr(self, attr), key)
+        self._power_unit_select.on_value_change(self._on_power_unit_change)
+        self._modulation_select.on_value_change(self._on_modulation_change)
+        self._scan_mode_select.on_value_change(self._on_scan_mode_change)
+        self._trigger_polarity_select.on_value_change(self._on_trigger_polarity_change)
+
+    def _wire_live_numeric(self, field, key: str) -> None:
+        def _kick(_e=None) -> None:
+            self._schedule_commit(key)
+
+        field.on("blur", _kick)
+        field.on("keydown.enter", _kick)
+        field._laser_on_nudge = _kick  # type: ignore[attr-defined]
+
+    def _schedule_commit(self, key: str) -> None:
+        old = self._commit_timers.pop(key, None)
+        if old is not None:
+            old.deactivate()
+
+        async def _run() -> None:
+            self._commit_timers.pop(key, None)
+            await self._run_commit(key)
+
+        self._commit_timers[key] = ui.timer(0.25, _run, once=True)
+
+    async def _run_commit(self, key: str) -> None:
+        if (
+            self._updating_controls
+            or not self._switch_handlers_enabled
+            or not self._is_connected()
         ):
-            field.on("keydown.enter", self._on_apply_scan_params)
+            return
+        if self._serial_handler_busy:
+            self._pending_commits[key] = lambda k=key: self._commit_named(k)
+            return
+        await self._commit_named(key)
+        await self._drain_pending_commits()
+
+    async def _drain_pending_commits(self) -> None:
+        while self._pending_commits and not self._serial_handler_busy:
+            if not self._is_connected():
+                self._pending_commits.clear()
+                return
+            _key, fn = next(iter(self._pending_commits.items()))
+            self._pending_commits.pop(_key)
+            await fn()
+
+    async def _commit_numeric(
+        self,
+        *,
+        action: str,
+        field,
+        binding: NumericBinding,
+        apply,
+        readback,
+        as_integer: bool = False,
+    ) -> bool:
+        raw = await _read_float_from_dom(field)
+        if raw is None:
+            return False
+        value = _clamp_float(raw, binding.minimum, binding.maximum)
+        sent: int | float = int(round(value)) if as_integer else value
+        self._serial_handler_busy = True
+        try:
+            status = await run.io_bound(apply, sent)
+            self._log(status, action)
+            if not status.ok:
+                return False
+            latest = readback()
+            self._updating_controls = True
+            try:
+                if latest is not None:
+                    field.set_value(
+                        _format_float_text(float(latest), as_integer=as_integer)
+                    )
+            finally:
+                self._updating_controls = False
+            return True
+        finally:
+            self._serial_handler_busy = False
+
+    async def _commit_named(self, key: str) -> None:
+        if not self._is_connected():
+            return
+        controller = self._controller
+        for item_key, action, attr, binding_attr, apply_name, spec_attr, as_integer in self._NUMERIC_COMMITS:
+            if item_key == key:
+                break
+        else:
+            return
+        apply = getattr(controller, apply_name)
+        if apply_name == "apply_tune":
+            apply = lambda v: controller.apply_tune(v, wait=True)
+        elif apply_name == "apply_scan_cycles":
+            apply = lambda v: controller.apply_scan_cycles(int(v))
+        wrote = await self._commit_numeric(
+            action=action,
+            field=getattr(self, attr),
+            binding=getattr(controller.bindings, binding_attr),
+            apply=apply,
+            readback=lambda: getattr(controller.specs, spec_attr),
+            as_integer=as_integer,
+        )
+        if wrote and key in {"power", "current"}:
+            self._updating_controls = True
+            try:
+                self._sync_regulation_from_specs()
+            finally:
+                self._updating_controls = False
+
+    def _sync_regulation_from_specs(self) -> None:
+        specs = self._controller.specs
+        bindings = bindings_from_specs(specs)
+        if specs.loop_mode is not None:
+            self._loop_mode_label.set_text(
+                f"Loop mode: {LOOP_MODE_LABELS.get(int(specs.loop_mode), specs.loop_mode)}"
+            )
+        _bind_text_float(
+            self._power_input,
+            bindings.power,
+            label="Power setpoint",
+            click_step=0.01,
+        )
+        self._power_unit_select.set_enabled(bindings.power_unit.enabled)
+        if bindings.power_unit.value is not None:
+            self._power_unit_select.set_value(bindings.power_unit.value)
+        _bind_text_float(
+            self._current_input,
+            bindings.current,
+            label="Current (mA)",
+            click_step=0.1,
+        )
 
     def _tuning_domain_from_ui(self) -> TuningDomain:
         raw = self._tuning_domain_toggle.value
@@ -405,31 +585,50 @@ class LaserControlWidget:
         domain: TuningDomain,
     ) -> None:
         self._sync_tuning_domain_labels(domain)
-        _bind_numeric(
+        click = tune_click_step(domain)
+        _bind_text_float(
             self._tune_input,
             bindings.tune,
             label=tune_setpoint_label(domain),
+            click_step=click,
         )
-        _bind_numeric(
+        _bind_text_float(
             self._scan_start_input,
             bindings.scan_start,
             label=scan_bound_label("Scan start", domain),
+            click_step=click,
         )
-        _bind_numeric(
+        _bind_text_float(
             self._scan_stop_input,
             bindings.scan_stop,
             label=scan_bound_label("Scan stop", domain),
+            click_step=click,
         )
-        _bind_numeric(
+        _bind_text_float(
             self._scan_speed_input,
             bindings.scan_speed,
             label=scan_speed_label(domain),
+            click_step=1.0,
             as_integer=True,
         )
-        _bind_numeric(
+        _bind_text_float(
             self._scan_step_input,
             bindings.scan_step,
             label=scan_step_label(domain),
+            click_step=click,
+        )
+        _bind_text_float(
+            self._scan_dwell_input,
+            bindings.scan_dwell_ms,
+            label="Dwell (ms)",
+            click_step=1.0,
+        )
+        _bind_text_float(
+            self._scan_cycles_input,
+            bindings.scan_cycles,
+            label="Scan cycles (-1 = ∞)",
+            click_step=1.0,
+            as_integer=True,
         )
 
     def _update_scan_cycles_label(self, specs) -> None:
@@ -450,8 +649,6 @@ class LaserControlWidget:
         self._updating_controls = True
         try:
             self._bind_tuning_and_scan_labels(bindings, domain)
-            _bind_numeric(self._scan_cycles_input, bindings.scan_cycles)
-            _bind_numeric(self._scan_dwell_input, bindings.scan_dwell_ms)
             self._scan_mode_select.set_enabled(bindings.scan_mode.enabled)
             if bindings.scan_mode.value is not None:
                 self._scan_mode_select.set_value(bindings.scan_mode.value)
@@ -462,29 +659,19 @@ class LaserControlWidget:
         finally:
             self._updating_controls = False
 
-    def _collect_scan_params_from_ui(
+    async def _collect_scan_params_from_ui(
         self,
-        *,
-        omit_step: bool = False,
     ) -> tuple[Optional[StatusMessage], dict[str, object]]:
         b = self._controller.bindings
-        specs = self._controller.specs
-        start = _numeric_value(self._scan_start_input) if b.scan_start.enabled else None
-        stop = _numeric_value(self._scan_stop_input) if b.scan_stop.enabled else None
+        start = await _read_float_from_dom(self._scan_start_input) if b.scan_start.enabled else None
+        stop = await _read_float_from_dom(self._scan_stop_input) if b.scan_stop.enabled else None
         if start is not None and stop is not None and start > stop:
-            start_changing = (
-                specs.scan_start is None or abs(float(start) - float(specs.scan_start)) > 1e-6
+            return (
+                StatusMessage.failure(
+                    f"Scan start ({start}) must be ≤ scan stop ({stop})."
+                ),
+                {},
             )
-            stop_changing = (
-                specs.scan_stop is None or abs(float(stop) - float(specs.scan_stop)) > 1e-6
-            )
-            if start_changing or stop_changing:
-                return (
-                    StatusMessage.failure(
-                        f"Scan start ({start}) must be ≤ scan stop ({stop})."
-                    ),
-                    {},
-                )
         mode = (
             ScanMode(int(self._scan_mode_select.value))
             if b.scan_mode.enabled and self._scan_mode_select.value is not None
@@ -498,35 +685,24 @@ class LaserControlWidget:
         cycles_raw = _numeric_value(self._scan_cycles_input)
         cycles_val = int(cycles_raw) if cycles_raw is not None else None
         step = (
-            None
-            if omit_step
-            else (_numeric_value(self._scan_step_input) if b.scan_step.enabled else None)
+            await _read_float_from_dom(self._scan_step_input)
+            if b.scan_step.enabled
+            else None
         )
         return None, {
             "start": start,
             "stop": stop,
             "speed": _integer_value(self._scan_speed_input) if b.scan_speed.enabled else None,
             "cycles": cycles_val if b.scan_cycles.enabled else None,
-            "dwell_ms": _numeric_value(self._scan_dwell_input) if b.scan_dwell_ms.enabled else None,
+            "dwell_ms": (
+                await _read_float_from_dom(self._scan_dwell_input)
+                if b.scan_dwell_ms.enabled
+                else None
+            ),
             "step": step,
             "mode": mode,
             "trigger_polarity": trigger_polarity,
         }
-
-    async def _apply_scan_params_from_ui(self, *, log: bool = True) -> StatusMessage:
-        error, kwargs = self._collect_scan_params_from_ui()
-        if error is not None:
-            if log:
-                self._log(error, "scan params")
-            return error
-        status = await run.io_bound(
-            lambda: self._controller.apply_scan_params(**kwargs)
-        )
-        if log:
-            self._log(status, "scan params")
-        if status.ok and "No scan parameter changes" not in status.summary:
-            self._sync_scan_fields_from_specs()
-        return status
 
     # --- Specs → UI ---
 
@@ -541,26 +717,10 @@ class LaserControlWidget:
         self._updating_controls = True
         try:
             identity = specs.identity
-            if identity is not None:
-                self._identity_label.set_text(
-                    f"{identity.manufacturer} {identity.model}  ·  "
-                    f"S/N {identity.customer_serial}  ·  FW {identity.firmware_version}  ·  "
-                    f"{self._controller.laser.port}"
-                )
-            else:
-                self._identity_label.set_text(f"Port {self._controller.laser.port}")
-
-            if specs.loop_mode is not None:
-                self._loop_mode_label.set_text(
-                    f"Loop mode: {LOOP_MODE_LABELS.get(int(specs.loop_mode), specs.loop_mode)}"
-                )
-
-            _bind_numeric(self._power_input, bindings.power, label="Power setpoint")
-            self._power_unit_select.set_enabled(bindings.power_unit.enabled)
-            if bindings.power_unit.value is not None:
-                self._power_unit_select.set_value(bindings.power_unit.value)
-
-            _bind_numeric(self._current_input, bindings.current)
+            self._identity_label.set_text(
+                identity_display(identity, self._controller.laser.port)
+            )
+            self._sync_regulation_from_specs()
             self._tuning_domain_toggle.set_enabled(bindings.tuning_domain.enabled)
             if bindings.tuning_domain.value is not None:
                 self._tuning_domain_toggle.set_value(bindings.tuning_domain.value)
@@ -570,9 +730,6 @@ class LaserControlWidget:
             self._modulation_select.set_enabled(bindings.modulation.enabled)
             if bindings.modulation.value is not None:
                 self._modulation_select.set_value(bindings.modulation.value)
-
-            _bind_numeric(self._scan_cycles_input, bindings.scan_cycles)
-            _bind_numeric(self._scan_dwell_input, bindings.scan_dwell_ms)
             self._scan_mode_select.set_enabled(bindings.scan_mode.enabled)
             if bindings.scan_mode.value is not None:
                 self._scan_mode_select.set_value(bindings.scan_mode.value)
@@ -673,6 +830,47 @@ class LaserControlWidget:
         finally:
             self._serial_handler_busy = False
 
+    async def _commit_enum(
+        self,
+        event,
+        *,
+        action: str,
+        enum_cls,
+        spec_attr: str,
+        apply_name: str,
+        select,
+        default: int | None = None,
+    ) -> None:
+        if (
+            self._updating_controls
+            or not self._switch_handlers_enabled
+            or self._serial_handler_busy
+            or not self._is_connected()
+            or event.value is None
+        ):
+            return
+        value = enum_cls(int(event.value))
+        current = getattr(self._controller.specs, spec_attr)
+        previous = int(current) if current is not None else default
+        if previous is not None and int(value) == previous:
+            return
+        self._serial_handler_busy = True
+        try:
+            status = await run.io_bound(getattr(self._controller, apply_name), value)
+            self._log(status, action)
+            self._updating_controls = True
+            try:
+                latest = getattr(self._controller.specs, spec_attr)
+                if latest is not None:
+                    select.set_value(int(latest))
+                elif previous is not None:
+                    select.set_value(previous)
+            finally:
+                self._updating_controls = False
+        finally:
+            self._serial_handler_busy = False
+        await self._drain_pending_commits()
+
     async def _on_laser_output(self, event) -> None:
         if (
             self._updating_controls
@@ -720,32 +918,15 @@ class LaserControlWidget:
         finally:
             self._serial_handler_busy = False
 
-    async def _on_apply_regulation(self) -> None:
-        if not self._is_connected():
-            return
-        bindings = self._controller.bindings
-        if bindings.power.enabled:
-            value = _numeric_value(self._power_input)
-            if value is None:
-                self._log(StatusMessage.failure("Power setpoint is empty."), "regulation")
-                return
-            status = await run.io_bound(self._controller.apply_power, value)
-            self._log(status, "power")
-            if bindings.power_unit.enabled and self._power_unit_select.value is not None:
-                unit = PowerUnit(int(self._power_unit_select.value))
-                status_u = await run.io_bound(self._controller.apply_power_unit, unit)
-                self._log(status_u, "power unit")
-        elif bindings.current.enabled:
-            value = _numeric_value(self._current_input)
-            if value is None:
-                self._log(StatusMessage.failure("Current setpoint is empty."), "regulation")
-                return
-            status = await run.io_bound(self._controller.apply_current, value)
-            self._log(status, "current")
-        else:
-            self._log(StatusMessage.failure("No regulation control available."), "regulation")
-            return
-        self._apply_specs_to_ui()
+    async def _on_power_unit_change(self, event) -> None:
+        await self._commit_enum(
+            event,
+            action="power unit",
+            enum_cls=PowerUnit,
+            spec_attr="power_unit",
+            apply_name="apply_power_unit",
+            select=self._power_unit_select,
+        )
 
     async def _on_tuning_domain_change(self, event) -> None:
         if (
@@ -805,58 +986,42 @@ class LaserControlWidget:
         finally:
             self._serial_handler_busy = False
 
-    async def _on_apply_tuning(self) -> None:
-        if not self._is_connected():
-            return
-        bindings = self._controller.bindings
-        tune_value: Optional[float] = None
-        if bindings.tune.enabled:
-            tune_value = _numeric_value(self._tune_input)
-            if tune_value is None:
-                self._log(StatusMessage.failure("Tune setpoint is empty."), "tuning")
-                return
+    async def _on_modulation_change(self, event) -> None:
+        await self._commit_enum(
+            event,
+            action="modulation",
+            enum_cls=ModulationSource,
+            spec_attr="modulation_source",
+            apply_name="apply_modulation",
+            select=self._modulation_select,
+        )
 
-        modulation: Optional[ModulationSource] = None
-        if bindings.modulation.enabled and self._modulation_select.value is not None:
-            modulation = ModulationSource(int(self._modulation_select.value))
+    async def _on_scan_mode_change(self, event) -> None:
+        await self._commit_enum(
+            event,
+            action="scan mode",
+            enum_cls=ScanMode,
+            spec_attr="scan_mode",
+            apply_name="apply_scan_mode",
+            select=self._scan_mode_select,
+        )
 
-        if tune_value is None and modulation is None:
-            self._log(StatusMessage.failure("No tuning parameters to apply."), "tuning")
-            return
-
-        self._serial_handler_busy = True
-        self._log(StatusMessage.success("Applying tuning…"), "tuning")
-        try:
-            status = await run.io_bound(
-                lambda: self._controller.apply_tuning(
-                    tune_nm=tune_value,
-                    modulation=modulation,
-                    wait_tune=True,
-                )
-            )
-            self._log(status, "tuning")
-            if status.ok:
-                self._switch_handlers_enabled = False
-                self._apply_specs_to_ui()
-                ui.timer(0.1, lambda: self._enable_switch_handlers(), once=True)
-        finally:
-            self._serial_handler_busy = False
-
-    async def _on_apply_scan_params(self) -> None:
-        if not self._is_connected():
-            return
-        self._serial_handler_busy = True
-        try:
-            await self._apply_scan_params_from_ui()
-        finally:
-            self._serial_handler_busy = False
+    async def _on_trigger_polarity_change(self, event) -> None:
+        await self._commit_enum(
+            event,
+            action="trigger polarity",
+            enum_cls=TriggerPolarity,
+            spec_attr="trigger_polarity",
+            apply_name="apply_trigger_polarity",
+            select=self._trigger_polarity_select,
+        )
 
     async def _on_start_scan(self) -> None:
         if not self._is_connected():
             return
         self._serial_handler_busy = True
         try:
-            error, kwargs = self._collect_scan_params_from_ui(omit_step=True)
+            error, kwargs = await self._collect_scan_params_from_ui()
             if error is not None:
                 self._log(error, "start scan")
                 return
@@ -864,13 +1029,9 @@ class LaserControlWidget:
                 lambda: self._controller.apply_scan_params(**kwargs)
             )
             if not apply_status.ok:
-                if "No scan parameter changes" in apply_status.summary:
-                    pass
-                elif apply_status.command in ("spd", "dwl", "step") or "must be ≤" in apply_status.summary:
-                    self._log(apply_status, "start scan")
-                    return
-                else:
-                    self._log(apply_status, "start scan (params)")
+                self._log(apply_status, "start scan")
+                return
+            self._sync_scan_fields_from_specs()
             status = await run.io_bound(self._controller.start_scan)
             self._log(status, "start scan")
             if status.ok:

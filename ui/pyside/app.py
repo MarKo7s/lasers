@@ -1,24 +1,15 @@
 """Standalone PySide6 demo for the Laser control widget.
 
-Run from the Laser project root::
+Run from the Laser project root (editable install)::
 
-    python -m ui.pyside.app
-
-Or run this file directly (path bootstrap included).
+    python -m laser.ui.pyside.app
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_ROOT = Path(__file__).resolve().parents[2]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
 from PySide6.QtWidgets import QMainWindow
 
-from ui.pyside.widget import create_laser_widget, ensure_qapp
+from laser.ui.pyside.widget import create_laser_widget, ensure_qapp
 
 
 def main() -> None:

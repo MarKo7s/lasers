@@ -75,6 +75,19 @@ body, .nicegui-content {
 .laser-panel .q-field--float .q-field__label {
   max-width: none !important;
 }
+.laser-float-number input[type=number]::-webkit-inner-spin-button,
+.laser-float-number input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+  display: none !important;
+}
+.laser-float-number input[type=number] {
+  -moz-appearance: textfield !important;
+}
+.laser-step-btns .q-btn {
+  min-height: 14px !important;
+  padding: 0 !important;
+}
 """
 
 

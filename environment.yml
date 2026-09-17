@@ -4,9 +4,5 @@ channels:
 dependencies:
   - python=3.11
   - pip
-  - jupyter
-  - ipywidgets
   - pip:
-      - pyserial>=3.5
-      - nicegui>=2.0
-      - PySide6>=6.0
+      - "lasers[ui,notebooks] @ git+https://github.com/MarKo7s/lasers.git@v2.0.0"

@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Callable, Iterable, Optional, TypeVar
 
-from newfocus.tlb8800_utilities.errors import TLB8800ParseError
-from newfocus.tlb8800_utilities.spec_fields import ALL_SPEC_FIELDS, DERIVED_SPEC_FIELDS, SpecField
-from newfocus.tlb8800_utilities.types import LaserSpecs, LoopMode
+from laser.newfocus.tlb8800_utilities.errors import TLB8800ParseError
+from laser.newfocus.tlb8800_utilities.spec_fields import ALL_SPEC_FIELDS, DERIVED_SPEC_FIELDS, SpecField
+from laser.newfocus.tlb8800_utilities.types import LaserSpecs, LoopMode
 
 T = TypeVar("T")
 

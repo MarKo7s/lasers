@@ -1,7 +1,7 @@
 """TLB-8800 support modules (protocol, errors, commands, logging)."""
 
-from newfocus.tlb8800_utilities.commands import TLBReadCommands, TLBSetCommands
-from newfocus.tlb8800_utilities.errors import (
+from laser.newfocus.tlb8800_utilities.commands import TLBReadCommands, TLBSetCommands
+from laser.newfocus.tlb8800_utilities.errors import (
     CommandResult,
     TLB8800Error,
     TLB8800ErrorCode,
@@ -12,8 +12,8 @@ from newfocus.tlb8800_utilities.errors import (
     interpret_protocol_response,
     parse_error_codes,
 )
-from newfocus.tlb8800_utilities.idn import parse_idn
-from newfocus.tlb8800_utilities.logging_paths import (
+from laser.newfocus.tlb8800_utilities.idn import parse_idn
+from laser.newfocus.tlb8800_utilities.logging_paths import (
     find_lab_root,
     instrument_log_path,
     laser_id_from_idn,
@@ -21,14 +21,14 @@ from newfocus.tlb8800_utilities.logging_paths import (
     program_data_lab_root,
     sanitize_log_id,
 )
-from newfocus.tlb8800_utilities.protocol import (
+from laser.newfocus.tlb8800_utilities.protocol import (
     DEFAULT_BAUDRATE,
     DEFAULT_TIMEOUT,
     SerialTransport,
     parse_numeric_response,
 )
-from newfocus.tlb8800_utilities.session_log import LaserSessionLogger, parse_log_level
-from newfocus.tlb8800_utilities.types import (
+from laser.newfocus.tlb8800_utilities.session_log import LaserSessionLogger, parse_log_level
+from laser.newfocus.tlb8800_utilities.types import (
     FanSpeed,
     InterlockState,
     LaserIdentity,

@@ -9,3 +9,4 @@ build/
 venv/
 .ipynb_checkpoints/
 *.log
+Laser.code-workspace

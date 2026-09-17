@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt
 
-from core.models import StatusMessage
+from laser.core.models import StatusMessage
 
 
 @dataclass(frozen=True)

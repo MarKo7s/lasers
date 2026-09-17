@@ -7,7 +7,7 @@ from typing import Optional, Union
 
 import serial
 
-from newfocus.tlb8800_utilities.errors import TLB8800ProtocolError
+from laser.newfocus.tlb8800_utilities.errors import TLB8800ProtocolError
 
 # Manual §5.1.1: 115200 baud, no parity, 8 data bits, 1 stop bit.
 DEFAULT_BAUDRATE = 115_200
@@ -91,6 +91,12 @@ def parse_numeric_response(response: str) -> Union[int, float]:
     if "." in text:
         return float(text)
     return int(text)
+
+
+def format_legacy_float(value: Union[int, float]) -> str:
+    """Serialize a float for Legacy set commands without dropping fractional digits."""
+    text = f"{float(value):.6f}".rstrip("0").rstrip(".")
+    return text or "0"
 
 
 def ensure_command_ack(response: str, command: str = "") -> None:

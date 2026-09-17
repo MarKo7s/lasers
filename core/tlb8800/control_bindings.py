@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from newfocus.tlb8800_utilities.types import (
+from laser.newfocus.tlb8800_utilities.types import (
     LaserSpecs,
     ScanMode,
     TriggerPolarity,
     TuningDomain,
 )
 
-from core.tlb8800.models import ControlBindings, NumericBinding, SelectBinding
+from laser.core.tlb8800.enums_ui import scan_step_min, tune_click_step
+from laser.core.tlb8800.models import ControlBindings, NumericBinding, SelectBinding
 
 
 def _numeric(
@@ -46,27 +47,31 @@ def bindings_from_specs(specs: LaserSpecs) -> ControlBindings:
         and specs.power_min is not None
         and specs.power_max is not None
     )
-    current_enabled = specs.current_control and specs.current_max is not None
 
     scan_speed_enabled = has_wl_range
+    wl_step = tune_click_step(specs.tuning_domain)
 
     return ControlBindings(
         power=_numeric(
             enabled=power_enabled,
-            value=specs.power,
-            minimum=specs.power_min,
-            maximum=specs.power_max,
+            value=specs.power if power_enabled else None,
+            minimum=specs.power_min if power_enabled else None,
+            maximum=specs.power_max if power_enabled else None,
             step=0.01,
         ),
         power_unit=_select(
             enabled=power_enabled and specs.power_unit is not None,
-            value=int(specs.power_unit) if specs.power_unit is not None else None,
+            value=int(specs.power_unit) if power_enabled and specs.power_unit is not None else None,
         ),
         current=_numeric(
-            enabled=current_enabled,
+            enabled=True,
             value=specs.current,
-            minimum=0.0 if current_enabled else None,
-            maximum=specs.current_max,
+            minimum=0.0,
+            maximum=(
+                float(specs.current_max)
+                if specs.current_max is not None and float(specs.current_max) > 0
+                else None
+            ),
             step=0.1,
         ),
         tune=_numeric(
@@ -74,7 +79,7 @@ def bindings_from_specs(specs: LaserSpecs) -> ControlBindings:
             value=specs.tune_setpoint,
             minimum=wl_min,
             maximum=wl_max,
-            step=0.001,
+            step=wl_step,
         ),
         tuning_domain=_select(
             enabled=True,
@@ -93,14 +98,14 @@ def bindings_from_specs(specs: LaserSpecs) -> ControlBindings:
             value=specs.scan_start,
             minimum=wl_min,
             maximum=wl_max,
-            step=0.001,
+            step=wl_step,
         ),
         scan_stop=_numeric(
             enabled=has_wl_range,
             value=specs.scan_stop,
             minimum=wl_min,
             maximum=wl_max,
-            step=0.001,
+            step=wl_step,
         ),
         scan_speed=_numeric(
             enabled=scan_speed_enabled,
@@ -117,18 +122,18 @@ def bindings_from_specs(specs: LaserSpecs) -> ControlBindings:
             step=1.0,
         ),
         scan_dwell_ms=_numeric(
-            enabled=specs.scan_dwell_time_ms is not None,
+            enabled=has_wl_range,
             value=specs.scan_dwell_time_ms,
             minimum=0.0,
             maximum=None,
             step=1.0,
         ),
         scan_step=_numeric(
-            enabled=specs.scan_step_size is not None,
+            enabled=has_wl_range,
             value=specs.scan_step_size,
-            minimum=0.0,
-            maximum=None,
-            step=0.001,
+            minimum=scan_step_min(specs.tuning_domain),
+            maximum=abs(float(wl_max) - float(wl_min)) if has_wl_range else None,
+            step=wl_step,
         ),
         scan_mode=_select(
             enabled=specs.scan_mode is not None,

@@ -6,11 +6,11 @@ import threading
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional, TypeVar, Union
 
-from newfocus import TLB8800
-from newfocus.tlb8800_utilities.spec_fields import (
+from laser.newfocus import TLB8800
+from laser.newfocus.tlb8800_utilities.spec_fields import (
     TUNING_DOMAIN_SPEC_FIELDS,
 )
-from newfocus.tlb8800_utilities.types import (
+from laser.newfocus.tlb8800_utilities.types import (
     LaserSpecs,
     ModulationSource,
     PowerUnit,
@@ -19,10 +19,10 @@ from newfocus.tlb8800_utilities.types import (
     TuningDomain,
 )
 
-from core.models import StatusMessage
-from core.tlb8800.control_bindings import bindings_from_specs
-from core.tlb8800.models import ControlBindings
-from core.tlb8800.status import status_from_command_result
+from laser.core.models import StatusMessage
+from laser.core.tlb8800.control_bindings import bindings_from_specs
+from laser.core.tlb8800.models import ControlBindings
+from laser.core.tlb8800.status import status_from_command_result
 
 T = TypeVar("T")
 
@@ -44,6 +44,7 @@ class TLB8800Controller:
     def __init__(self) -> None:
         self._laser: Optional[TLB8800] = None
         self._serial_lock = threading.RLock()
+        self._owns_connection = True
 
     @property
     def is_connected(self) -> bool:
@@ -75,13 +76,33 @@ class TLB8800Controller:
 
     def _disconnect_unlocked(self) -> None:
         if self._laser is not None:
-            self._laser.close()
+            if self._owns_connection:
+                self._laser.close()
             self._laser = None
+            self._owns_connection = True
+
+    def attach(self, laser: TLB8800, *, owns_connection: bool = False) -> LaserSpecs:
+        """Wrap an already-open ``TLB8800`` without opening a new port."""
+
+        def work() -> LaserSpecs:
+            self._disconnect_unlocked()
+            if not laser.is_open:
+                raise RuntimeError("Laser is not connected")
+            self._laser = laser
+            self._owns_connection = owns_connection
+            try:
+                _ = laser.specs
+            except RuntimeError:
+                laser.refresh_specs()
+            return self.specs
+
+        return self._execute_serial("attach", work)
 
     def connect(self, port: str) -> LaserSpecs:
         def work() -> LaserSpecs:
             self._disconnect_unlocked()
             self._laser = TLB8800.connect(port, refresh_specs=True)
+            self._owns_connection = True
             return self.specs
 
         return self._execute_serial("connect", work)
@@ -124,7 +145,7 @@ class TLB8800Controller:
         """Query ``errcnt?``; if count > 0, read and clear ``err?`` with descriptions."""
 
         def work() -> StatusMessage:
-            from newfocus.tlb8800_utilities.errors import error_description
+            from laser.newfocus.tlb8800_utilities.errors import error_description
 
             try:
                 count = int(self.laser.read.error_count())
@@ -185,7 +206,7 @@ class TLB8800Controller:
         def work() -> StatusMessage:
             result = self.laser.set.power(value)
             if result.ok:
-                self._refresh_specs_fields(("power",))
+                self._refresh_specs_fields(("power", "loop_mode"))
             return status_from_command_result(result)
 
         return self._execute_serial("power", work)
@@ -203,7 +224,7 @@ class TLB8800Controller:
         def work() -> StatusMessage:
             result = self.laser.set.current(milliamps)
             if result.ok:
-                self._refresh_specs_fields(("current",))
+                self._refresh_specs_fields(("current", "loop_mode"))
             return status_from_command_result(result)
 
         return self._execute_serial("current", work)
@@ -219,7 +240,20 @@ class TLB8800Controller:
 
     def apply_tune(self, setpoint: Union[int, float], *, wait: bool = True) -> StatusMessage:
         def work() -> StatusMessage:
-            result = self.laser.set.tune(setpoint, wait=wait)
+            value = float(setpoint)
+            wl_min = self.specs.wavelength_min
+            wl_max = self.specs.wavelength_max
+            if wl_min is not None and value < wl_min:
+                return StatusMessage.failure(
+                    f"Tune {value} below minimum {wl_min}",
+                    command="wave",
+                )
+            if wl_max is not None and value > wl_max:
+                return StatusMessage.failure(
+                    f"Tune {value} above maximum {wl_max}",
+                    command="wave",
+                )
+            result = self.laser.set.tune(value, wait=wait)
             if result.ok:
                 self._refresh_specs_fields(("tune_setpoint", "operation_complete"))
             return status_from_command_result(result)
@@ -234,97 +268,6 @@ class TLB8800Controller:
             return status_from_command_result(result)
 
         return self._execute_serial("modulation", work)
-
-    def apply_tuning(
-        self,
-        *,
-        domain: Optional[TuningDomain] = None,
-        tune_nm: Optional[float] = None,
-        modulation: Optional[ModulationSource] = None,
-        wait_tune: bool = True,
-    ) -> StatusMessage:
-        """Apply tuning domain, wavelength, and modulation in one serial session."""
-
-        def work() -> StatusMessage:
-            messages: list[str] = []
-            ok = True
-            command = "apply_tuning"
-            specs = self.specs
-
-            failures: list[str] = []
-
-            def _step(name: str, status: StatusMessage) -> None:
-                nonlocal ok, command
-                if status.ok:
-                    messages.append(f"{name}: OK")
-                else:
-                    ok = False
-                    failures.append(f"{name}: {status.summary}")
-                    if status.command:
-                        command = status.command
-
-            refreshed: set[str] = set()
-            if domain is not None:
-                current = int(specs.tuning_domain) if specs.tuning_domain is not None else None
-                if current != int(domain):
-                    domain_status = status_from_command_result(
-                        self.laser.set.tuning_domain(domain)
-                    )
-                    _step("tuning domain", domain_status)
-                    if domain_status.ok:
-                        refreshed.update(TUNING_DOMAIN_SPEC_FIELDS)
-                        self._refresh_specs_fields(TUNING_DOMAIN_SPEC_FIELDS)
-                        specs = self.laser.specs
-
-            if tune_nm is not None:
-                wl_min = specs.wavelength_min
-                wl_max = specs.wavelength_max
-                if wl_min is not None and tune_nm < wl_min:
-                    return StatusMessage.failure(
-                        f"Tune {tune_nm} below minimum {wl_min}",
-                        command="wave",
-                    )
-                if wl_max is not None and tune_nm > wl_max:
-                    return StatusMessage.failure(
-                        f"Tune {tune_nm} above maximum {wl_max}",
-                        command="wave",
-                    )
-                tune_status = status_from_command_result(
-                    self.laser.set.tune(tune_nm, wait=wait_tune)
-                )
-                _step("tune", tune_status)
-                if tune_status.ok:
-                    refreshed.update(("tune_setpoint", "operation_complete"))
-
-            if modulation is not None:
-                current_mod = (
-                    int(specs.modulation_source)
-                    if specs.modulation_source is not None
-                    else None
-                )
-                if current_mod != int(modulation):
-                    mod_status = status_from_command_result(
-                        self.laser.set.modulation_source(modulation)
-                    )
-                    _step("modulation", mod_status)
-                    if mod_status.ok:
-                        refreshed.add("modulation_source")
-
-            if not messages:
-                return StatusMessage.success("No tuning changes to apply", command=command)
-
-            if refreshed:
-                self._refresh_specs_fields(refreshed)
-
-            if failures:
-                summary = "; ".join(failures)
-            elif ok:
-                summary = "; ".join(messages) if len(messages) > 1 else messages[0]
-            else:
-                summary = "Tuning command failed"
-            return StatusMessage(ok=ok, summary=summary, command=command)
-
-        return self._execute_serial("apply_tuning", work)
 
     def _apply_scan_field(self, result, field: str) -> StatusMessage:
         status = status_from_command_result(result)
@@ -358,25 +301,45 @@ class TLB8800Controller:
         )
 
     def apply_scan_dwell(self, dwell_ms: Union[int, float]) -> StatusMessage:
-        return self._execute_serial(
-            "scan_dwell",
-            lambda: self._apply_scan_field(
-                self.laser.set.scan_dwell_time_ms(dwell_ms), "scan_dwell_time_ms"
-            ),
-        )
+        def work() -> StatusMessage:
+            value = float(dwell_ms)
+            if value < 0:
+                return StatusMessage.failure(
+                    f"Dwell must be ≥ 0 (got {value})",
+                    command="dwl",
+                )
+            return self._apply_scan_field(
+                self.laser.set.scan_dwell_time_ms(value), "scan_dwell_time_ms"
+            )
+
+        return self._execute_serial("scan_dwell", work)
 
     def apply_scan_step(self, step: Union[int, float]) -> StatusMessage:
-        return self._execute_serial(
-            "scan_step",
-            lambda: self._apply_scan_field(
-                self.laser.set.scan_step_size(step), "scan_step_size"
-            ),
-        )
+        def work() -> StatusMessage:
+            value = float(step)
+            if value <= 0:
+                return StatusMessage.failure(
+                    f"Scan step must be > 0 (got {value})",
+                    command="step",
+                )
+            return self._apply_scan_field(
+                self.laser.set.scan_step_size(value), "scan_step_size"
+            )
+
+        return self._execute_serial("scan_step", work)
 
     def apply_scan_mode(self, mode: ScanMode) -> StatusMessage:
         return self._execute_serial(
             "scan_mode",
             lambda: self._apply_scan_field(self.laser.set.scan_mode(mode), "scan_mode"),
+        )
+
+    def apply_trigger_polarity(self, polarity: TriggerPolarity) -> StatusMessage:
+        return self._execute_serial(
+            "trigger_polarity",
+            lambda: self._apply_scan_field(
+                self.laser.set.trigger_polarity(polarity), "trigger_polarity"
+            ),
         )
 
     def apply_scan_params(
@@ -399,11 +362,6 @@ class TLB8800Controller:
             failures: list[str] = []
             refreshed: set[str] = set()
 
-            def _changed(new: float, old: Optional[float], *, eps: float = 1e-6) -> bool:
-                if old is None:
-                    return True
-                return abs(float(new) - float(old)) > eps
-
             def _step(name: str, result, *fields: str) -> None:
                 nonlocal ok, command, applied
 
@@ -417,27 +375,17 @@ class TLB8800Controller:
                     command = status.command
                 failures.append(f"{name}: {status.summary}")
 
-            start_changing = start is not None and _changed(start, specs.scan_start)
-            stop_changing = stop is not None and _changed(stop, specs.scan_stop)
-            if (
-                start is not None
-                and stop is not None
-                and (start_changing or stop_changing)
-                and float(start) > float(stop)
-            ):
+            if start is not None and stop is not None and float(start) > float(stop):
                 return StatusMessage.failure(
                     f"Scan start ({start}) must be ≤ scan stop ({stop})",
                     command="scan params",
                 )
 
-            current_mode = int(specs.scan_mode) if specs.scan_mode is not None else None
-            target_mode = int(mode) if mode is not None else current_mode
-
-            if start_changing:
+            if start is not None:
                 _step("scan start", self.laser.set.scan_start(start), "scan_start")
-            if stop_changing:
+            if stop is not None:
                 _step("scan stop", self.laser.set.scan_stop(stop), "scan_stop")
-            if speed is not None and _changed(speed, specs.scan_speed):
+            if speed is not None:
                 speed_int = int(round(float(speed)))
                 if specs.scan_speed_min is not None and speed_int < specs.scan_speed_min:
                     return StatusMessage.failure(
@@ -450,7 +398,7 @@ class TLB8800Controller:
                         command="spd",
                     )
                 _step("scan speed", self.laser.set.scan_speed(speed_int), "scan_speed")
-            if dwell_ms is not None and _changed(dwell_ms, specs.scan_dwell_time_ms):
+            if dwell_ms is not None:
                 if dwell_ms < 0:
                     return StatusMessage.failure(
                         f"Dwell must be ≥ 0 (got {dwell_ms})",
@@ -461,42 +409,26 @@ class TLB8800Controller:
                     self.laser.set.scan_dwell_time_ms(dwell_ms),
                     "scan_dwell_time_ms",
                 )
-            if cycles is not None and _changed(float(cycles), float(specs.scan_cycles or 0), eps=0.5):
+            if cycles is not None:
                 _step("scan cycles", self.laser.set.scan_cycles(cycles), "scan_cycles")
-            if mode is not None and current_mode != int(mode):
-                mode_result = self.laser.set.scan_mode(mode)
-                _step("scan mode", mode_result, "scan_mode")
-                if "scan_mode" in refreshed:
-                    self._refresh_specs_fields(("scan_mode",))
-                    refreshed.discard("scan_mode")
-                    specs = self.laser.specs
-                    current_mode = int(mode)
-                    target_mode = current_mode
-
+            if mode is not None:
+                _step("scan mode", self.laser.set.scan_mode(mode), "scan_mode")
             if trigger_polarity is not None:
-                current_polarity = (
-                    int(specs.trigger_polarity)
-                    if specs.trigger_polarity is not None
-                    else None
+                _step(
+                    "trigger polarity",
+                    self.laser.set.trigger_polarity(trigger_polarity),
+                    "trigger_polarity",
                 )
-                if current_polarity != int(trigger_polarity):
-                    _step(
-                        "trigger polarity",
-                        self.laser.set.trigger_polarity(trigger_polarity),
-                        "trigger_polarity",
-                    )
-
-            if step is not None and _changed(step, specs.scan_step_size):
+            if step is not None:
                 if step <= 0:
                     return StatusMessage.failure(
                         f"Scan step must be > 0 (got {step})",
                         command="step",
                     )
-                if target_mode == int(ScanMode.AUTOMATIC_STEP):
-                    _step("scan step", self.laser.set.scan_step_size(step), "scan_step_size")
+                _step("scan step", self.laser.set.scan_step_size(step), "scan_step_size")
 
             if applied == 0:
-                return StatusMessage.success("No scan parameter changes to apply", command=command)
+                return StatusMessage.success("No scan parameters provided", command=command)
 
             if refreshed:
                 self._refresh_specs_fields(refreshed)

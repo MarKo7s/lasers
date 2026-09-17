@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 from typing import Optional, TypeVar, Union
 
-from newfocus.tlb8800_utilities.commands import TLBReadCommands, TLBSetCommands
-from newfocus.tlb8800_utilities.errors import (
+from laser.newfocus.tlb8800_utilities.commands import TLBReadCommands, TLBSetCommands
+from laser.newfocus.tlb8800_utilities.errors import (
     CommandResult,
     TLB8800ExecutionError,
     TLB8800ParseError,
@@ -14,23 +14,23 @@ from newfocus.tlb8800_utilities.errors import (
     interpret_protocol_response,
     parse_error_codes,
 )
-from newfocus.tlb8800_utilities.logging_paths import (
+from laser.newfocus.tlb8800_utilities.logging_paths import (
     instrument_log_path,
     laser_id_from_idn,
     sanitize_log_id,
 )
-from newfocus.tlb8800_utilities.protocol import (
+from laser.newfocus.tlb8800_utilities.protocol import (
     DEFAULT_BAUDRATE,
     DEFAULT_TIMEOUT,
     SerialTransport,
     parse_numeric_response,
 )
-from newfocus.tlb8800_utilities.session_log import LaserSessionLogger
-from newfocus.tlb8800_utilities.spec_fields import ALL_SPEC_FIELDS
-from newfocus.tlb8800_utilities.spec_refresh import refresh_laser_specs_fields
-from newfocus.tlb8800_utilities.types import LaserIdentity, LaserSpecs, OperationCompleteState
+from laser.newfocus.tlb8800_utilities.session_log import LaserSessionLogger
+from laser.newfocus.tlb8800_utilities.spec_fields import ALL_SPEC_FIELDS
+from laser.newfocus.tlb8800_utilities.spec_refresh import refresh_laser_specs_fields
+from laser.newfocus.tlb8800_utilities.types import LaserIdentity, LaserSpecs, OperationCompleteState
 
-from newfocus.tlb8800_utilities.types import (  # noqa: F401
+from laser.newfocus.tlb8800_utilities.types import (  # noqa: F401
     FanSpeed,
     InterlockState,
     LoopMode,
@@ -108,6 +108,10 @@ class TLB8800:
         if self._session_log is None:
             raise RuntimeError("Logging is disabled for this connection")
         return self._session_log.set_level(level)
+
+    @property
+    def is_open(self) -> bool:
+        return self._transport.is_open
 
     @property
     def port(self) -> str:

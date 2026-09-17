@@ -10,8 +10,8 @@ Repository: [github.com/MarKo7s/lasers](https://github.com/MarKo7s/lasers)
 - **`TLB8800`** connection class with `read` / `set` command facades
 - **`LaserSpecs`** snapshot (auto-loaded on connect) — wavelength range, scan limits, control mode
 - Session **logging** under `ProgramData`
-- Jupyter notebook for interactive testing (`discover_lasers.ipynb`)
-- **NiceGUI** control widget (`ui/nicegui`) with shared `core/` logic (PySide planned under `ui/pyside`)
+- Jupyter notebooks for interactive testing (`discover_lasers.ipynb`, `tests/pyside_widget.ipynb`)
+- **NiceGUI** and **PySide6** control widgets (`laser.ui.nicegui`, `laser.ui.pyside`)
 
 ## Requirements
 
@@ -21,20 +21,32 @@ Repository: [github.com/MarKo7s/lasers](https://github.com/MarKo7s/lasers)
 
 ## Installation
 
-From the **`Laser`** project folder:
+Pip name is **`lasers`**; after install, import as **`laser`**.
+
+From GitHub (pinned tag):
+
+```bash
+pip install "lasers[ui,notebooks] @ git+https://github.com/MarKo7s/lasers.git@v2.0.0"
+```
+
+Editable checkout (from the `Laser` folder):
+
+```bash
+pip install -e ".[ui,notebooks]"
+```
+
+Conda env (Python + pip only; the package comes from the git tag in `environment.yml`):
 
 ```bash
 conda env create -f environment.yml
 conda activate lasers_env
 ```
 
-Or with pip only:
-
-```bash
-pip install -r requirements.txt
+```python
+from laser.discovery import LaserDiscovery
+from laser.newfocus import TLB8800
+from laser.ui.pyside import LaserControlWidget
 ```
-
-Run scripts and the notebook from the project root so `import discovery`, `import newfocus`, and `import core` resolve correctly.
 
 ## NiceGUI laser widget
 
@@ -43,7 +55,7 @@ Dark-themed control panel: USB discovery, connect, spec-driven bounds (power/cur
 **Standalone demo** (from the `Laser` folder, with `lasers_env` active):
 
 ```bash
-python -m ui.nicegui.app
+python -m laser.ui.nicegui.app
 ```
 
 Open http://localhost:8080 in a browser.
@@ -52,13 +64,59 @@ Open http://localhost:8080 in a browser.
 
 ```python
 from nicegui import ui
-from ui.nicegui import create_laser_widget
+from laser.ui.nicegui import create_laser_widget
 
 with ui.column():
     create_laser_widget()
 ```
 
-Shared logic lives in `core/`: generic `DiscoveryService` and `create_laser_controller()`, with TLB-8800 specifics under `core/tlb8800/` (`TLB8800Controller`, `bindings_from_specs`). A future PySide widget can reuse the same layer; add a new subpackage and factory branch for other laser models.
+Shared logic lives in `laser.core`: generic `DiscoveryService` and `create_laser_controller()`, with TLB-8800 specifics under `laser.core.tlb8800` (`TLB8800Controller`, `bindings_from_specs`).
+
+## PySide laser widget
+
+Same control panel as NiceGUI, as a Qt widget. Standalone demo:
+
+```bash
+python -m laser.ui.pyside.app
+```
+
+**Discovery mode** (user Connects in the GUI):
+
+```python
+from laser.ui.pyside import LaserControlWidget
+
+widget = LaserControlWidget()
+widget.show()
+```
+
+**Already connected** — pass a live `TLB8800`; the panel starts in the connected state (device menu shows that laser). **Disconnect** closes the serial port so Refresh can find it again (`laser.is_open` becomes `False`):
+
+```python
+from laser.discovery import LaserDiscovery
+from laser.newfocus import TLB8800
+from laser.ui.pyside import LaserControlWidget
+
+port = next(iter(LaserDiscovery().discover()))
+laser = TLB8800.connect(port)
+widget = LaserControlWidget(laser)
+widget.show()
+# widget.laser is laser
+```
+
+After notebook `laser.set.*` calls, lock the panel so cells cannot fight the script, then pull instrument values back:
+
+```python
+gui.remotecontrol(True)
+laser.set.current(80)
+gui.sync_gui_panel_to_laser()
+gui.remotecontrol(False)
+```
+
+See `tests/pyside_widget.ipynb` for a Jupyter walkthrough (`%gui qt`).
+
+<!-- gui-screenshot:start -->
+![PySide laser control widget](docs/images/gui.png)
+<!-- gui-screenshot:end -->
 
 ### Project layout (`core` and UI)
 
@@ -68,14 +126,14 @@ Shared logic lives in `core/`: generic `DiscoveryService` and `create_laser_cont
 | `core/factory.py` | `create_laser_controller(device)` by model |
 | `core/models.py` | Shared `DiscoveredDevice`, `StatusMessage` |
 | `core/tlb8800/` | TLB-8800 controller, UI bindings, enum labels |
-| `ui/nicegui/` | NiceGUI widget and standalone demo (`python -m ui.nicegui.app`) |
-| `ui/pyside/` | Planned Qt widget (same `core` layer) |
+| `ui/nicegui/` | NiceGUI widget (`python -m laser.ui.nicegui.app`) |
+| `ui/pyside/` | PySide6 widget (`python -m laser.ui.pyside.app`) |
 
 ## Quick start
 
 ```python
-from discovery import LaserDiscovery
-from newfocus import TLB8800
+from laser.discovery import LaserDiscovery
+from laser.newfocus import TLB8800
 
 # Find lasers on USB COM ports → {port: idn_string}
 lasers = LaserDiscovery().discover()
@@ -188,8 +246,8 @@ Scan speed limits: `scan_speed_min` / `scan_speed_max` (from `spmin?` / `spmax?`
 ### 1. Discover and connect
 
 ```python
-from discovery import LaserDiscovery, list_usb_ports
-from newfocus import TLB8800
+from laser.discovery import LaserDiscovery, list_usb_ports
+from laser.newfocus import TLB8800
 
 print(list_usb_ports())
 lasers = LaserDiscovery().discover()
@@ -225,7 +283,7 @@ laser.ON(clear_interlock=False)
 ### 4. Wavelength sweep
 
 ```python
-from newfocus import ScanMode
+from laser.newfocus import ScanMode
 
 laser.set.scan_start(835)
 laser.set.scan_stop(852)
@@ -246,7 +304,7 @@ laser.clear_errors()
 
 ## API reference
 
-### Discovery (`discovery.py`)
+### Discovery (`laser.discovery`)
 
 | Symbol | Description |
 |--------|-------------|
@@ -259,7 +317,7 @@ laser.clear_errors()
 | `discover()` | Module-level shortcut |
 | `list_usb_ports()` | Module-level shortcut |
 
-### `TLB8800` (`newfocus/TLB8800.py`)
+### `TLB8800` (`laser.newfocus`)
 
 | Method / property | Description |
 |-------------------|-------------|
@@ -393,7 +451,7 @@ All return **`CommandResult`** (check `.ok`). Does not raise on `&`, `!`, `#`.
 
 ### `LaserSpecs` (key fields)
 
-Full definition: `newfocus/tlb8800_utilities/types.py`.
+Full definition: `laser.newfocus.tlb8800_utilities.types`.
 
 | Field | Description |
 |-------|-------------|
@@ -408,7 +466,7 @@ Full definition: `newfocus/tlb8800_utilities/types.py`.
 | `laser_output`, `interlock_state` | Output and safety state |
 | `error_codes` | Last error queue snapshot |
 
-### Enums (`newfocus.tlb8800_utilities.types`)
+### Enums (`laser.newfocus.tlb8800_utilities.types`)
 
 | Enum | Values |
 |------|--------|
@@ -421,10 +479,10 @@ Full definition: `newfocus/tlb8800_utilities/types.py`.
 | `TriggerPolarity` | `ACTIVE_LOW=0`, `ACTIVE_HIGH=1` |
 | `FanSpeed` | `OFF=0`, `LOW=1`, `MEDIUM=2`, `HIGH=3` |
 
-Import from `newfocus`:
+Import from `laser.newfocus`:
 
 ```python
-from newfocus import LoopMode, PowerUnit, ScanMode, TuningDomain
+from laser.newfocus import LoopMode, PowerUnit, ScanMode, TuningDomain
 ```
 
 ## Session logging
@@ -442,19 +500,21 @@ Disable logging: `TLB8800.connect(port, enable_log=False)`.
 ```
 Laser/
 ├── README.md
-├── discovery.py              # COM discovery
-├── supported_models.json     # Model list + baudrate
-├── discover_lasers.ipynb     # Interactive notebook
+├── pyproject.toml            # pip name lasers; import prefix laser
+├── discovery.py              # laser.discovery
+├── supported_models.json
+├── discover_lasers.ipynb
+├── tests/pyside_widget.ipynb
 ├── environment.yml
 ├── requirements.txt
+├── docs/images/gui.png       # PySide widget screenshot
+├── scripts/release.py
+├── scripts/capture_gui.py
+├── core/                     # laser.core
+├── ui/                       # laser.ui.nicegui / laser.ui.pyside
 └── newfocus/
-    ├── TLB8800.py            # Main driver class
+    ├── TLB8800.py            # laser.newfocus.TLB8800
     └── tlb8800_utilities/
-        ├── commands.py       # read / set facades
-        ├── types.py          # LaserSpecs, enums
-        ├── protocol.py       # Serial transport
-        ├── errors.py         # CommandResult, error codes
-        └── session_log.py    # File logging
 ```
 
 ## Adding laser models
@@ -474,8 +534,30 @@ Edit `supported_models.json`:
 }
 ```
 
-Discovery picks up new entries automatically. A dedicated driver class under `newfocus/` is added when a model needs a different command set or protocol.
+Discovery picks up new entries automatically. A dedicated driver class under `laser.newfocus` is added when a model needs a different command set or protocol.
 
 ## Notebook
 
-Open `discover_lasers.ipynb` from the project folder with the `lasers_env` kernel for step-by-step discovery, connection, and command trials.
+Open `discover_lasers.ipynb` from the project folder with the `lasers_env` kernel for step-by-step discovery, connection, and command trials. Open `tests/pyside_widget.ipynb` for the PySide widget (empty launch vs pass a connected `TLB8800`).
+
+## Versioning
+
+- Version source of truth: `pyproject.toml` (`[project].version`)
+- Changelog: `CHANGELOG.md`
+- Git tags: `vX.Y.Z` (example: `v2.0.0`)
+- `__init__.py` reads version from installed metadata (`importlib.metadata.version("lasers")`)
+- Do not hand-edit `__init__.py` version except as a source-tree fallback
+
+## Releasing
+
+```bash
+python scripts/release.py --from-changelog
+```
+
+This pushes `main`, creates annotated tag `v{version}` from `pyproject.toml`, and pushes the tag. GitHub then builds the tarball from that tag.
+
+Optional GitHub Release:
+
+```bash
+gh release create v2.0.0 --title "lasers 2.0.0" --notes-file CHANGELOG.md
+```

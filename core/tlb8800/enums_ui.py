@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from newfocus.tlb8800_utilities.types import (
+from laser.core.tlb8800.models import NumericBinding
+from laser.newfocus.tlb8800_utilities.types import (
+    LaserIdentity,
     ModulationSource,
     PowerUnit,
     ScanMode,
@@ -18,6 +20,11 @@ TUNING_DOMAIN_OPTIONS: dict[int, str] = {
 
 def is_frequency_domain(domain: TuningDomain | int | None) -> bool:
     return domain is not None and int(domain) == int(TuningDomain.FREQUENCY)
+
+
+def tune_click_step(domain: TuningDomain | int | None) -> float:
+    """Spinner click increment: 1 nm, or 0.001 THz in frequency mode."""
+    return 0.001 if is_frequency_domain(domain) else 1.0
 
 
 def tuning_value_unit(domain: TuningDomain | int | None) -> str:
@@ -40,6 +47,40 @@ def scan_speed_label(domain: TuningDomain | int | None) -> str:
 
 def scan_step_label(domain: TuningDomain | int | None) -> str:
     return f"Step size ({tuning_value_unit(domain)})"
+
+
+def scan_step_min(domain: TuningDomain | int | None) -> float:
+    """Smallest step the UI will send (datasheet 0.01 nm; finer in THz)."""
+    return 0.0001 if is_frequency_domain(domain) else 0.01
+
+
+def numeric_field_label(
+    base: str,
+    binding: NumericBinding,
+    *,
+    as_integer: bool = False,
+) -> str:
+    def _fmt(value: float) -> str:
+        return str(int(round(value))) if as_integer else f"{value:g}"
+
+    if binding.minimum is not None and binding.maximum is not None:
+        return f"{base} ({_fmt(binding.minimum)} – {_fmt(binding.maximum)})"
+    if binding.minimum is not None:
+        return f"{base} (≥ {_fmt(binding.minimum)})"
+    if binding.maximum is not None:
+        return f"{base} (≤ {_fmt(binding.maximum)})"
+    return base
+
+
+def identity_display(identity: LaserIdentity | None, port: str) -> str:
+    if identity is None:
+        return f"Port {port}"
+    return (
+        f"{identity.manufacturer} {identity.model}  ·  "
+        f"S/N {identity.customer_serial}  ·  FW {identity.firmware_version}  ·  "
+        f"{port}"
+    )
+
 
 SCAN_MODE_OPTIONS: dict[int, str] = {
     int(ScanMode.AUTOMATIC_STEP): "Automatic step",

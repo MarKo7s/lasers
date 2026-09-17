@@ -1,7 +1,7 @@
 """New Focus TLB-8800 driver package."""
 
-from newfocus.TLB8800 import TLB8800
-from newfocus.tlb8800_utilities import (
+from laser.newfocus.TLB8800 import TLB8800
+from laser.newfocus.tlb8800_utilities import (
     CommandResult,
     FanSpeed,
     InterlockState,

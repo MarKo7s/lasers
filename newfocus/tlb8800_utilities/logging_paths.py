@@ -7,7 +7,7 @@ import re
 import sys
 from pathlib import Path
 
-from newfocus.tlb8800_utilities.idn import parse_idn
+from laser.newfocus.tlb8800_utilities.idn import parse_idn
 
 _LOG_ID_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 _MODEL_DIR = "TLB8800"

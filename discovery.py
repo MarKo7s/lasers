@@ -11,7 +11,7 @@ from typing import Optional, Sequence
 import serial
 from serial.tools import list_ports
 
-from newfocus.tlb8800_utilities.protocol import DEFAULT_BAUDRATE, DEFAULT_TIMEOUT, SerialTransport
+from laser.newfocus.tlb8800_utilities.protocol import DEFAULT_BAUDRATE, DEFAULT_TIMEOUT, SerialTransport
 
 _DEFAULT_CONFIG = Path(__file__).resolve().parent / "supported_models.json"
 
@@ -64,13 +64,13 @@ class LaserDiscovery:
             file_baudrate, self._models = _load_config(path)
         else:
             # Source checkout (supported_models.json next to this file) OR
-            # installed package (supported_models.json under lasers/ package data).
+            # installed package (supported_models.json under laser package data).
             if _DEFAULT_CONFIG.is_file():
                 self._config_path = _DEFAULT_CONFIG
                 file_baudrate, self._models = _load_config(_DEFAULT_CONFIG)
             else:
                 self._config_path = Path("<package-data>")
-                config_text = resources_files("lasers").joinpath("supported_models.json").read_text(
+                config_text = resources_files("laser").joinpath("supported_models.json").read_text(
                     encoding="utf-8"
                 )
                 file_baudrate, self._models = _load_config_from_text(config_text)
